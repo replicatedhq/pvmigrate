@@ -6,7 +6,7 @@ pvmigrate allows migrating PVCs between two StorageClasses by creating new PVs, 
 
 To migrate PVs from the 'default' StorageClass to mynewsc:
 ```bash
-pvcmigrate --source-sc default --dest-sc mynewsc
+pvmigrate --source-sc default --dest-sc mynewsc
 ```
 
 ## process

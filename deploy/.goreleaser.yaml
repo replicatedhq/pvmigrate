@@ -13,7 +13,7 @@ builds:
       - amd64
     env:
       - CGO_ENABLED=0
-    main: cmd/pvmigrate/main.go
+    main: cmd/main.go
     ldflags: -s -w
       -X github.com/replicatedhq/pvmigrate/pkg/version.version={{.Version}}
       -X github.com/replicatedhq/pvmigrate/pkg/version.gitSHA={{.Commit}}

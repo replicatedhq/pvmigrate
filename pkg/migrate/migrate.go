@@ -32,8 +32,8 @@ func Cli() {
 	var setDefaults bool
 	var verboseCopy bool
 
-	flag.StringVar(&sourceSCName, "source-sc", "default", "storage provider name to migrate from")
-	flag.StringVar(&destSCName, "dest-sc", "longhorn", "storage provider name to migrate to")
+	flag.StringVar(&sourceSCName, "source-sc", "", "storage provider name to migrate from")
+	flag.StringVar(&destSCName, "dest-sc", "", "storage provider name to migrate to")
 	flag.StringVar(&rsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
 	flag.BoolVar(&setDefaults, "set-defaults", true, "change default storage class from source to dest")
 	flag.BoolVar(&verboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")

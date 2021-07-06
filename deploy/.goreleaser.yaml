@@ -1,0 +1,41 @@
+project_name: pvmigrate
+release:
+  github:
+    owner: replicatedhq
+    name: pvmigrate
+builds:
+  - id: pvmigrate
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+    main: cmd/pvmigrate/main.go
+    ldflags: -s -w
+      -X github.com/replicatedhq/pvmigrate/pkg/version.version={{.Version}}
+      -X github.com/replicatedhq/pvmigrate/pkg/version.gitSHA={{.Commit}}
+      -X github.com/replicatedhq/pvmigrate/pkg/version.buildTime={{.Date}}
+      -extldflags "-static"
+    binary: pvmigrate
+    hooks: {}
+archives:
+  - id: pvmigrate
+    builds:
+      - pvmigrate
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: 'pvmigrate_{{ .Os }}_{{ .Arch }}'
+    files:
+      - licence*
+      - LICENCE*
+      - license*
+      - LICENSE*
+      - readme*
+      - README*
+      - changelog*
+      - CHANGELOG*

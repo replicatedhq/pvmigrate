@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 VERSION_PACKAGE = github.com/replicatedhq/pvmigrate/pkg/version
-VERSION ?= 0.0.1 #TODO FIX VERSION ?=`git describe --tags --dirty`
+VERSION ?=`git describe --tags --dirty`
 DATE=`date -u +"%Y-%m-%dT%H:%M:%SZ"`
 
 GIT_TREE = $(shell git rev-parse --is-inside-work-tree 2>/dev/null)

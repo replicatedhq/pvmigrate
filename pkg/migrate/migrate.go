@@ -42,7 +42,7 @@ func Cli() {
 	Migrate(sourceSCName, destSCName, rsyncImage, setDefaults, verboseCopy)
 }
 
-// Migrate moves data and PVCs from one storageclass to another
+// Migrate moves data and PVCs from one StorageClass to another
 func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCopy bool) {
 	// setup k8s
 	cfg, err := config.GetConfig()
@@ -126,7 +126,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 	}
 
 	// create new PVCs for each matching PVC
-	fmt.Printf("\nCreating new PVCs to migrate data to using the %s storageclass\n", destSCName)
+	fmt.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
 	newPVCs := map[string][]corev1.PersistentVolumeClaim{}
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
@@ -496,7 +496,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 		}
 	}
 
-	fmt.Printf("\nResetting PV retention policicies\n")
+	fmt.Printf("\nResetting PV retention policies\n")
 	for pvname, desired := range desiredPVRetentions {
 		err = mutatePV(clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = desired
@@ -543,9 +543,9 @@ func validateStorageClasses(w io.Writer, clientset k8sclient.Interface, sourceSC
 	// get storage providers
 	storageClasses, err := clientset.StorageV1().StorageClasses().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get storageclasses: %w", err)
+		return fmt.Errorf("failed to get StorageClasses: %w", err)
 	}
-	fmt.Fprintf(w, "\nFound %d storageclasses:\n", len(storageClasses.Items))
+	fmt.Fprintf(w, "\nFound %d StorageClasses:\n", len(storageClasses.Items))
 	sourceScFound, destScFound := false, false
 	for _, sc := range storageClasses.Items {
 		fmt.Printf("%s\n", sc.Name)
@@ -557,10 +557,10 @@ func validateStorageClasses(w io.Writer, clientset k8sclient.Interface, sourceSC
 		}
 	}
 	if !sourceScFound {
-		return fmt.Errorf("unable to find source storageclass %s", sourceSCName)
+		return fmt.Errorf("unable to find source StorageClass %s", sourceSCName)
 	}
 	if !destScFound {
-		return fmt.Errorf("unable to find dest storageclass %s", destSCName)
+		return fmt.Errorf("unable to find dest StorageClass %s", destSCName)
 	}
 	fmt.Fprintf(w, "\nMigrating data from %s to %s\n", sourceSCName, destSCName)
 	return nil

@@ -270,7 +270,7 @@ func TestValidateStorageClasses(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:     "both storageclasses exist and are distinct",
+			name:     "both StorageClasses exist and are distinct",
 			sourceSC: "sourcesc",
 			destSC:   "destsc",
 			resources: []runtime.Object{

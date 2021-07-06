@@ -37,7 +37,7 @@ deps:
 	go get golang.org/x/lint/golint
 
 .PHONY: lint
-lint:
+lint: deps
 	golint -set_exit_status ./... ./cmd/...
 
 .PHONY: vet

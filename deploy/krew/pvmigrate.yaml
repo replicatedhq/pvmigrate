@@ -38,7 +38,7 @@ spec:
     - from: LICENSE
       to: .
     bin: pvmigrate.exe
-  shortDescription: Executes application pvmigrate tests in a cluster
+  shortDescription: Migrates PVs between StorageClasses
   homepage: https://github.com/replicatedhq/pvmigrate
   description: |
     This plugin migrates PVs from one StorageClass to another, changing

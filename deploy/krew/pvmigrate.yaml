@@ -47,7 +47,7 @@ spec:
     Usage:
       $ kubectl pvmigrate --source-sc myoriginalsc --dest-sc mynewsc
 
-      where both myoriginalsc and mynewsc are storageclasses.
+      where both `myoriginalsc` and `mynewsc` are StorageClasses.
 
     For additional options:
       $ kubectl pvmigrate --help

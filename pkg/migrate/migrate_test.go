@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
@@ -324,6 +325,149 @@ func TestValidateStorageClasses(t *testing.T) {
 				assert.Error(t, err)
 			}
 
+		})
+	}
+}
+
+func TestGetPVCs(t *testing.T) {
+	tests := []struct {
+		name         string
+		resources    []runtime.Object
+		sourceScName string
+		wantErr      bool
+		pvcs         map[string][]corev1.PersistentVolumeClaim
+		reclaims     map[string]map[string]corev1.PersistentVolumeReclaimPolicy
+		pvs          []string
+		namespaces   []string
+		validate     func(clientset k8sclient.Interface, t *testing.T) error
+	}{
+		{
+			name:         "one PV, no PVC",
+			sourceScName: "sc1",
+			wantErr:      true,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+					},
+				},
+			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+				return nil
+			},
+		},
+		{
+			name:         "one PV, one PVC",
+			sourceScName: "sc1",
+			wantErr:      false,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+				return nil
+			},
+			pvcs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": []corev1.PersistentVolumeClaim{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			reclaims: map[string]map[string]corev1.PersistentVolumeReclaimPolicy{
+				"ns1": {
+					"pvc1": corev1.PersistentVolumeReclaimDelete,
+				},
+			},
+			pvs:        []string{"pv1"},
+			namespaces: []string{"ns1"},
+		},
+
+		{
+			name:         "different sc PV",
+			sourceScName: "sc1",
+			wantErr:      false,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc2",
+					},
+				},
+			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+				return nil
+			},
+			pvcs:       map[string][]corev1.PersistentVolumeClaim{},
+			reclaims:   map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
+			pvs:        []string{},
+			namespaces: []string{},
+		},
+
+		{
+			name:         "example test",
+			resources:    []runtime.Object{},
+			sourceScName: "",
+			pvcs:         map[string][]corev1.PersistentVolumeClaim{},
+			reclaims:     map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
+			pvs:          []string{},
+			namespaces:   []string{},
+			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+				return nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset(test.resources...)
+			pvcs, reclaims, pvs, nses, err := getPVCs(context.Background(), testWriter{t: t}, clientset, test.sourceScName)
+			if !test.wantErr {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				return
+			}
+
+			err = test.validate(clientset, t)
+			assert.NoError(t, err)
+
+			assert.Equal(t, test.pvcs, pvcs)
+			assert.Equal(t, test.reclaims, reclaims)
+			assert.Equal(t, test.pvs, pvs)
+			assert.Equal(t, test.namespaces, nses)
 		})
 	}
 }

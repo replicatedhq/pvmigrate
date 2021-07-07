@@ -330,12 +330,15 @@ func TestValidateStorageClasses(t *testing.T) {
 }
 
 func TestGetPVCs(t *testing.T) {
+	dscString := "dsc"
 	tests := []struct {
 		name         string
 		resources    []runtime.Object
 		sourceScName string
+		destScName   string
 		wantErr      bool
-		pvcs         map[string][]corev1.PersistentVolumeClaim
+		originalPVCs map[string][]corev1.PersistentVolumeClaim
+		newPVCs      map[string][]corev1.PersistentVolumeClaim
 		reclaims     map[string]map[string]corev1.PersistentVolumeReclaimPolicy
 		pvs          []string
 		namespaces   []string
@@ -344,6 +347,7 @@ func TestGetPVCs(t *testing.T) {
 		{
 			name:         "one PV, no PVC",
 			sourceScName: "sc1",
+			destScName:   "dsc",
 			wantErr:      true,
 			resources: []runtime.Object{
 				&corev1.PersistentVolume{
@@ -362,6 +366,7 @@ func TestGetPVCs(t *testing.T) {
 		{
 			name:         "one PV, one PVC",
 			sourceScName: "sc1",
+			destScName:   "dsc",
 			wantErr:      false,
 			resources: []runtime.Object{
 				&corev1.PersistentVolume{
@@ -391,9 +396,16 @@ func TestGetPVCs(t *testing.T) {
 				},
 			},
 			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+				pvc, err := clientset.CoreV1().PersistentVolumeClaims("ns1").Get(context.TODO(), "pvc1-pvcmigrate", metav1.GetOptions{})
+				if err != nil {
+					return err
+				}
+				if *pvc.Spec.StorageClassName != dscString {
+					return fmt.Errorf("storage class name was %q not dsc", *pvc.Spec.StorageClassName)
+				}
 				return nil
 			},
-			pvcs: map[string][]corev1.PersistentVolumeClaim{
+			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
 				"ns1": []corev1.PersistentVolumeClaim{
 					{
 						ObjectMeta: metav1.ObjectMeta{
@@ -401,6 +413,24 @@ func TestGetPVCs(t *testing.T) {
 							Namespace: "ns1",
 						},
 						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			newPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": []corev1.PersistentVolumeClaim{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1-pvcmigrate",
+							Namespace: "ns1",
+							Labels: map[string]string{
+								baseAnnotation: "pvc1",
+								kindAnnotation: "dest",
+							},
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							StorageClassName: &dscString,
+							AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						},
 					},
 				},
 			},
@@ -416,6 +446,7 @@ func TestGetPVCs(t *testing.T) {
 		{
 			name:         "different sc PV",
 			sourceScName: "sc1",
+			destScName:   "dsc",
 			wantErr:      false,
 			resources: []runtime.Object{
 				&corev1.PersistentVolume{
@@ -430,17 +461,130 @@ func TestGetPVCs(t *testing.T) {
 			validate: func(clientset k8sclient.Interface, t *testing.T) error {
 				return nil
 			},
-			pvcs:       map[string][]corev1.PersistentVolumeClaim{},
-			reclaims:   map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
-			pvs:        []string{},
-			namespaces: []string{},
+			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
+			newPVCs:      map[string][]corev1.PersistentVolumeClaim{},
+			reclaims:     map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
+			pvs:          []string{},
+			namespaces:   []string{},
+		},
+
+		{
+			name:         "one PV, one PVC - migration in progress",
+			sourceScName: "sc1",
+			destScName:   "dsc",
+			wantErr:      false,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv2",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "dsc",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1-pvcmigrate",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1-pvcmigrate",
+						Namespace: "ns1",
+						Labels: map[string]string{
+							"test": "retained",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: &dscString,
+						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+				pvc, err := clientset.CoreV1().PersistentVolumeClaims("ns1").Get(context.TODO(), "pvc1-pvcmigrate", metav1.GetOptions{})
+				if err != nil {
+					return err
+				}
+				if pvc.Labels["test"] != "retained" {
+					return fmt.Errorf("PVC was recreated instead of retained")
+				}
+				return nil
+			},
+			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": []corev1.PersistentVolumeClaim{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			newPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": []corev1.PersistentVolumeClaim{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1-pvcmigrate",
+							Namespace: "ns1",
+							Labels: map[string]string{
+								"test": "retained",
+							},
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							StorageClassName: &dscString,
+							AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						},
+					},
+				},
+			},
+			reclaims: map[string]map[string]corev1.PersistentVolumeReclaimPolicy{
+				"ns1": {
+					"pvc1": corev1.PersistentVolumeReclaimDelete,
+				},
+			},
+			pvs:        []string{"pv1"},
+			namespaces: []string{"ns1"},
 		},
 
 		{
 			name:         "example test",
 			resources:    []runtime.Object{},
 			sourceScName: "",
-			pvcs:         map[string][]corev1.PersistentVolumeClaim{},
+			destScName:   "",
+			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
+			newPVCs:      map[string][]corev1.PersistentVolumeClaim{},
 			reclaims:     map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
 			pvs:          []string{},
 			namespaces:   []string{},
@@ -453,7 +597,7 @@ func TestGetPVCs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			pvcs, reclaims, pvs, nses, err := getPVCs(context.Background(), testWriter{t: t}, clientset, test.sourceScName)
+			originalPVCs, newPVCs, reclaims, pvs, nses, err := getPVCs(context.Background(), testWriter{t: t}, clientset, test.sourceScName, test.destScName)
 			if !test.wantErr {
 				assert.NoError(t, err)
 			} else {
@@ -464,7 +608,8 @@ func TestGetPVCs(t *testing.T) {
 			err = test.validate(clientset, t)
 			assert.NoError(t, err)
 
-			assert.Equal(t, test.pvcs, pvcs)
+			assert.Equal(t, test.originalPVCs, originalPVCs)
+			assert.Equal(t, test.newPVCs, newPVCs)
 			assert.Equal(t, test.reclaims, reclaims)
 			assert.Equal(t, test.pvs, pvs)
 			assert.Equal(t, test.namespaces, nses)

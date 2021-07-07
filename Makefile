@@ -51,5 +51,5 @@ test: lint vet
 .PHONY: build
 build: bin/pvmigrate
 
-bin/pvmigrate: cmd/main.go
+bin/pvmigrate: cmd/main.go pkg/migrate/migrate.go pkg/version/version.go
 	go build ${LDFLAGS} -o bin/pvmigrate cmd/main.go

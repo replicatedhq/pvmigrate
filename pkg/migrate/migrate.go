@@ -344,11 +344,11 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		if verboseCopy {
 			w.Printf("    %s\n", line)
 		} else {
-			w.Print(fmt.Sprintf(".")) // one dot per line of output
+			_, _ = fmt.Fprintf(w.Writer(), ".") // one dot per line of output
 		}
 	}
 	if !verboseCopy {
-		w.Print(fmt.Sprintf("done!\n")) // add a newline at the end of the dots if not showing pod logs
+		_, _ = fmt.Fprintf(w.Writer(), "done!\n") // add a newline at the end of the dots if not showing pod logs
 	}
 
 	err = podLogs.Close()

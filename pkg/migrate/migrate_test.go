@@ -196,7 +196,7 @@ func TestScaleUpPods(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := scaleUpPods(testWriter{t: t}, clientset, test.namespaces)
+			err := scaleUpPods(context.Background(), testWriter{t: t}, clientset, test.namespaces)
 			assert.NoError(t, err)
 
 			err = test.validate(clientset, t)
@@ -253,7 +253,7 @@ func TestMutatePV(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := mutatePV(testWriter{t: t}, clientset, test.pvname, test.ttmutator, test.ttchecker)
+			err := mutatePV(context.Background(), testWriter{t: t}, clientset, test.pvname, test.ttmutator, test.ttchecker)
 			assert.NoError(t, err)
 
 			err = test.validate(clientset, t)
@@ -318,7 +318,7 @@ func TestValidateStorageClasses(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := validateStorageClasses(testWriter{t: t}, clientset, test.sourceSC, test.destSC)
+			err := validateStorageClasses(context.Background(), testWriter{t: t}, clientset, test.sourceSC, test.destSC)
 			if !test.wantErr {
 				assert.NoError(t, err)
 			} else {

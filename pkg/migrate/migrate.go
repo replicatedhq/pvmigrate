@@ -582,16 +582,28 @@ func originalPvcName(newName string) string {
 
 // get a PV, apply the selected mutator to the PV, update the PV, use the supplied validator to wait for the update to show up
 func mutatePV(clientset k8sclient.Interface, pvName string, mutator func(volume *corev1.PersistentVolume) *corev1.PersistentVolume, checker func(volume *corev1.PersistentVolume) bool) error {
-	pv, err := clientset.CoreV1().PersistentVolumes().Get(context.TODO(), pvName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get persistent volumes %s: %w", pvName, err)
-	}
+	tries := 0
+	for {
+		pv, err := clientset.CoreV1().PersistentVolumes().Get(context.TODO(), pvName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get persistent volumes %s: %w", pvName, err)
+		}
 
-	pv = mutator(pv)
+		pv = mutator(pv)
 
-	_, err = clientset.CoreV1().PersistentVolumes().Update(context.TODO(), pv, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
+		_, err = clientset.CoreV1().PersistentVolumes().Update(context.TODO(), pv, metav1.UpdateOptions{})
+		if err != nil {
+			if k8serrors.IsConflict(err) {
+				if tries > 5 {
+					return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
+				}
+				tries++
+				continue
+			} else {
+				return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
+			}
+		}
+		break
 	}
 
 	for {

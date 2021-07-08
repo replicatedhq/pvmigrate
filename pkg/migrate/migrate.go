@@ -274,7 +274,7 @@ func copyAllPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface
 
 			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.Name, ns, err)
 			}
 		}
 	}

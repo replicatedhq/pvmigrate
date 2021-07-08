@@ -17,7 +17,6 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
-	_ "k8s.io/client-go/plugin/pkg/client/auth" // this allows accessing a larger array of cloud providers
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 

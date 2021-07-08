@@ -102,7 +102,6 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 									ClaimName: sourcePvcName,
-									ReadOnly:  true,
 								},
 							},
 						},
@@ -111,7 +110,6 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 									ClaimName: destPvcName,
-									ReadOnly:  false,
 								},
 							},
 						},

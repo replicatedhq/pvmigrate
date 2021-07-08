@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -196,7 +197,8 @@ func TestScaleUpPods(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := scaleUpPods(context.Background(), testWriter{t: t}, clientset, test.namespaces)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := scaleUpPods(context.Background(), testlog, clientset, test.namespaces)
 			assert.NoError(t, err)
 
 			err = test.validate(clientset, t)
@@ -253,7 +255,8 @@ func TestMutatePV(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := mutatePV(context.Background(), testWriter{t: t}, clientset, test.pvname, test.ttmutator, test.ttchecker)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := mutatePV(context.Background(), testlog, clientset, test.pvname, test.ttmutator, test.ttchecker)
 			assert.NoError(t, err)
 
 			err = test.validate(clientset, t)
@@ -318,7 +321,8 @@ func TestValidateStorageClasses(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := validateStorageClasses(context.Background(), testWriter{t: t}, clientset, test.sourceSC, test.destSC)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := validateStorageClasses(context.Background(), testlog, clientset, test.sourceSC, test.destSC)
 			if !test.wantErr {
 				assert.NoError(t, err)
 			} else {
@@ -597,7 +601,8 @@ func TestGetPVCs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			originalPVCs, newPVCs, reclaims, pvs, nses, err := getPVCs(context.Background(), testWriter{t: t}, clientset, test.sourceScName, test.destScName)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			originalPVCs, newPVCs, reclaims, pvs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName)
 			if !test.wantErr {
 				assert.NoError(t, err)
 			} else {

@@ -282,71 +282,9 @@ func copyAllPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface
 }
 
 func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool) error {
-	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "migrate-" + sourcePvcName,
-			Namespace: ns,
-			Labels: map[string]string{
-				baseAnnotation: sourcePvcName,
-			},
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Volumes: []corev1.Volume{
-				{
-					Name: "source",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: sourcePvcName,
-						},
-					},
-				},
-				{
-					Name: "dest",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: destPvcName,
-						},
-					},
-				},
-			},
-			Containers: []corev1.Container{
-				{
-					Name:  "pvmigrate-" + sourcePvcName,
-					Image: rsyncImage,
-					Command: []string{
-						"rsync",
-					},
-					Args: []string{
-						"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
-						"-v",       // show verbose output
-						"-P",       // show progress, and resume aborted/partial transfers
-						"--delete", // delete files in dest that are not in source
-						"/source/",
-						"/dest",
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							MountPath: "/source",
-							Name:      "source",
-						},
-						{
-							MountPath: "/dest",
-							Name:      "dest",
-						},
-					},
-				},
-			},
-		},
-	}, metav1.CreateOptions{})
+	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage)
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "failed to create pod to migrate PVC %s to %s in %s: %v\n", sourcePvcName, destPvcName, ns, err)
-		// TODO maybe this should be a fatal error
-		return nil
+		return err
 	}
 	_, _ = fmt.Fprintf(w, "waiting for pod %s to start in %s\n", createdPod.Name, createdPod.Namespace)
 
@@ -434,6 +372,75 @@ func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface,
 
 	_, _ = fmt.Fprintf(w, "finished migrating PVC %s\n", sourcePvcName)
 	return nil
+}
+
+func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string) (*corev1.Pod, error) {
+	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "migrate-" + sourcePvcName,
+			Namespace: ns,
+			Labels: map[string]string{
+				baseAnnotation: sourcePvcName,
+			},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Volumes: []corev1.Volume{
+				{
+					Name: "source",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: sourcePvcName,
+						},
+					},
+				},
+				{
+					Name: "dest",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: destPvcName,
+						},
+					},
+				},
+			},
+			Containers: []corev1.Container{
+				{
+					Name:  "pvmigrate-" + sourcePvcName,
+					Image: rsyncImage,
+					Command: []string{
+						"rsync",
+					},
+					Args: []string{
+						"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+						"-v",       // show verbose output
+						"-P",       // show progress, and resume aborted/partial transfers
+						"--delete", // delete files in dest that are not in source
+						"/source/",
+						"/dest",
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							MountPath: "/source",
+							Name:      "source",
+						},
+						{
+							MountPath: "/dest",
+							Name:      "dest",
+						},
+					},
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pod to migrate PVC %s to %s in %s: %w", sourcePvcName, destPvcName, ns, err)
+
+	}
+	return createdPod, nil
 }
 
 // getPVCs gets all of the PVCs and associated info using the given StorageClass, and creates PVCs to migrate to as needed

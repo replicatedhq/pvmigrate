@@ -616,3 +616,104 @@ func TestGetPVCs(t *testing.T) {
 		})
 	}
 }
+
+func Test_createMigrationPod(t *testing.T) {
+	type args struct {
+		ns            string
+		sourcePvcName string
+		destPvcName   string
+		rsyncImage    string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    *corev1.Pod
+		wantErr bool
+	}{
+		{
+			name: "basic",
+			args: args{
+				ns:            "testns",
+				sourcePvcName: "sourcepvc",
+				destPvcName:   "destpvc",
+				rsyncImage:    "imagename",
+			},
+			want: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "migrate-sourcepvc",
+					Namespace: "testns",
+					Labels: map[string]string{
+						baseAnnotation: "sourcepvc",
+					},
+				},
+				Spec: corev1.PodSpec{
+
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "source",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "sourcepvc",
+								},
+							},
+						},
+						{
+							Name: "dest",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "destpvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "pvmigrate-sourcepvc",
+							Image: "imagename",
+							Command: []string{
+								"rsync",
+							},
+							Args: []string{
+								"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+								"-v",       // show verbose output
+								"-P",       // show progress, and resume aborted/partial transfers
+								"--delete", // delete files in dest that are not in source
+								"/source/",
+								"/dest",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/source",
+									Name:      "source",
+								},
+								{
+									MountPath: "/dest",
+									Name:      "dest",
+								},
+							},
+						},
+					},
+				},
+				Status: corev1.PodStatus{},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset()
+			got, err := createMigrationPod(context.Background(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

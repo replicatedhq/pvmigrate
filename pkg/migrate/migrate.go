@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -53,7 +54,9 @@ func Cli() {
 		os.Exit(1)
 	}
 
-	err = Migrate(context.TODO(), os.Stdout, clientset, sourceSCName, destSCName, rsyncImage, setDefaults, verboseCopy)
+	output := log.New(os.Stdout, "", 0) // this has no time prefix etc
+
+	err = Migrate(context.TODO(), output, clientset, sourceSCName, destSCName, rsyncImage, setDefaults, verboseCopy)
 	if err != nil {
 		fmt.Printf("%s\n", err.Error())
 		os.Exit(1)
@@ -61,7 +64,7 @@ func Cli() {
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
-func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCopy bool) error {
+func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCopy bool) error {
 	err := validateStorageClasses(ctx, w, clientset, sourceSCName, destSCName)
 	if err != nil {
 		return err
@@ -83,9 +86,9 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	// mark previously existing PVs as 'retain' so that when we delete the PVC it does not take the PV with it (in case things go wrong)
-	_, _ = fmt.Fprintf(w, "\nMarking previously existing PVs as to-be-retained\n")
+	w.Printf("\nMarking previously existing PVs as to-be-retained\n")
 	for _, pvname := range originalPVNames {
-		_, _ = fmt.Fprintf(w, "Marking PV %s as to-be-retained\n", pvname)
+		w.Printf("Marking PV %s as to-be-retained\n", pvname)
 		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 			return volume
@@ -98,7 +101,7 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	// mark newly created PVs as 'retain'
-	_, _ = fmt.Fprintf(w, "\nMarking newly-created existing PVs as to-be-retained\n")
+	w.Printf("\nMarking newly-created existing PVs as to-be-retained\n")
 	allPVs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get persistent volumes: %w", err)
@@ -118,7 +121,7 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 
 				// if this PV corresponds to one of the ones we created to migrate to, then set the reclaim policy
 				if isMatch {
-					_, _ = fmt.Fprintf(w, "Marking PV %s (PVC %s in %s) as to-be-retained\n", pv.Name, pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace)
+					w.Printf("Marking PV %s (PVC %s in %s) as to-be-retained\n", pv.Name, pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace)
 					err = mutatePV(ctx, w, clientset, pv.Name, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 						volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 						return volume
@@ -136,10 +139,10 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	// delete all the original PVCs to free up names
-	_, _ = fmt.Fprintf(w, "\nDeleting original PVCs to free up names\n")
+	w.Printf("\nDeleting original PVCs to free up names\n")
 	for ns, nsPVCs := range matchingPVCs {
 		for _, nsPVC := range nsPVCs {
-			_, _ = fmt.Fprintf(w, "Deleting original PVC %s in %s\n", nsPVC.Name, ns)
+			w.Printf("Deleting original PVC %s in %s\n", nsPVC.Name, ns)
 
 			// delete the PVC so that we can create a new PVC with the original name
 			err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, nsPVC.Name, metav1.DeleteOptions{})
@@ -150,10 +153,10 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	// delete migrated-to PVCs to free up PVs
-	_, _ = fmt.Fprintf(w, "\nDeleting migrated-to PVCs to free up PVs\n")
+	w.Printf("\nDeleting migrated-to PVCs to free up PVs\n")
 	for ns, nsPVCs := range newPVCs {
 		for _, nsPVC := range nsPVCs {
-			_, _ = fmt.Fprintf(w, "Deleting migrated PVC %s in %s\n", nsPVC.Name, ns)
+			w.Printf("Deleting migrated PVC %s in %s\n", nsPVC.Name, ns)
 
 			// delete the PVC so that we can create a new PVC with the original name
 			err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, nsPVC.Name, metav1.DeleteOptions{})
@@ -163,10 +166,10 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nRemoving claimrefs from PVs to attach new PVCs\n")
+	w.Printf("\nRemoving claimrefs from PVs to attach new PVCs\n")
 	// original PVs
 	for _, pvname := range originalPVNames {
-		_, _ = fmt.Fprintf(w, "Removing claimrefs from PV %s\n", pvname)
+		w.Printf("Removing claimrefs from PV %s\n", pvname)
 		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.ClaimRef = nil
 			return volume
@@ -174,7 +177,7 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 			if volume.Spec.ClaimRef == nil {
 				return true
 			}
-			_, _ = fmt.Fprintf(w, "claimref for %s: %+v\n", pvname, volume.Spec.ClaimRef)
+			w.Printf("claimref for %s: %+v\n", pvname, volume.Spec.ClaimRef)
 			return false
 		})
 		if err != nil {
@@ -184,7 +187,7 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 
 	// new PVs
 	for pvname := range desiredPVRetentions {
-		_, _ = fmt.Fprintf(w, "Removing claimrefs from PV %s\n", pvname)
+		w.Printf("Removing claimrefs from PV %s\n", pvname)
 		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.ClaimRef = nil
 			return volume
@@ -192,7 +195,7 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 			if volume.Spec.ClaimRef == nil {
 				return true
 			}
-			_, _ = fmt.Fprintf(w, "claimref for %s: %+v\n", pvname, volume.Spec.ClaimRef)
+			w.Printf("claimref for %s: %+v\n", pvname, volume.Spec.ClaimRef)
 			return false
 		})
 		if err != nil {
@@ -200,12 +203,12 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nCreating new PVCs with the original names\n")
+	w.Printf("\nCreating new PVCs with the original names\n")
 	// make a new PVC with the updated name that owns the PV in question
 	for ns, nsPVCs := range newPVCs { // TODO: change this to be for each old PVC, so that we retain annotations/labels/access modes
 		for _, newPVC := range nsPVCs {
 			originalName := originalPvcName(newPVC.Name)
-			_, _ = fmt.Fprintf(w, "Creating PVC %s in %s using PV %s\n", originalName, ns, newPVC.Spec.VolumeName)
+			w.Printf("Creating PVC %s in %s using PV %s\n", originalName, ns, newPVC.Spec.VolumeName)
 
 			// create a new PVC referencing the PV we copied data to, but with the original name
 			newPVC.Status = corev1.PersistentVolumeClaimStatus{}
@@ -216,13 +219,13 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 			newPVC.Spec.DataSource = nil
 			_, err = clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &newPVC, metav1.CreateOptions{})
 			if err != nil {
-				_, _ = fmt.Fprintf(w, "failed to create PVC %s of ns %s with intended PV %s, you will likely need to do this manually: %v\n", originalName, ns, newPVC.Spec.VolumeName, err)
+				w.Printf("failed to create PVC %s of ns %s with intended PV %s, you will likely need to do this manually: %v\n", originalName, ns, newPVC.Spec.VolumeName, err)
 				delete(desiredPVRetentions, newPVC.Spec.VolumeName) // don't reset retention policies if the PVC wasn't able to be created
 			}
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nResetting PV retention policies\n")
+	w.Printf("\nResetting PV retention policies\n")
 	for pvname, desired := range desiredPVRetentions {
 		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = desired
@@ -242,7 +245,7 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	// delete migrated PVs
-	_, _ = fmt.Fprintf(w, "\nDeleting original PVs\n")
+	w.Printf("\nDeleting original PVs\n")
 	for _, pvname := range originalPVNames {
 		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
@@ -251,26 +254,26 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 			return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete
 		})
 		if err != nil {
-			_, _ = fmt.Fprintf(w, "failed to mark old and redundant PV %s as having a reclaim policy of 'Delete': %v\n", pvname, err)
+			w.Printf("failed to mark old and redundant PV %s as having a reclaim policy of 'Delete': %v\n", pvname, err)
 		}
 
 		err = clientset.CoreV1().PersistentVolumes().Delete(ctx, pvname, metav1.DeleteOptions{})
 		if err != nil {
-			_, _ = fmt.Fprintf(w, "failed to remove old and redundant PV %s: %v\n", pvname, err)
+			w.Printf("failed to remove old and redundant PV %s: %v\n", pvname, err)
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nSuccess!\n")
+	w.Printf("\nSuccess!\n")
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, verboseCopy bool) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, verboseCopy bool) error {
 	// create a pod for each PVC migration, and wait for it to finish
-	_, _ = fmt.Fprintf(w, "\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
+	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
 			sourcePvcName, destPvcName := nsPvc.Name, newPvcName(nsPvc.Name)
-			_, _ = fmt.Fprintf(w, "Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
+			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
 
 			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy)
 			if err != nil {
@@ -281,18 +284,18 @@ func copyAllPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool) error {
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool) error {
 	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(w, "waiting for pod %s to start in %s\n", createdPod.Name, createdPod.Namespace)
+	w.Printf("waiting for pod %s to start in %s\n", createdPod.Name, createdPod.Namespace)
 
 	// cleanup pod after completion
 	defer func() {
 		err = clientset.CoreV1().Pods(ns).Delete(context.TODO(), createdPod.Name, metav1.DeleteOptions{})
 		if err != nil {
-			_, _ = fmt.Fprintf(w, "failed to delete migration pod %s: %v", createdPod.Name, err)
+			w.Printf("failed to delete migration pod %s: %v", createdPod.Name, err)
 		}
 	}()
 
@@ -301,7 +304,7 @@ func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface,
 	for {
 		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 		if err != nil {
-			_, _ = fmt.Fprintf(w, "failed to get newly created migration pod %s: %v\n", createdPod.Name, err)
+			w.Printf("failed to get newly created migration pod %s: %v\n", createdPod.Name, err)
 			continue
 		}
 
@@ -315,7 +318,7 @@ func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface,
 			break
 		}
 
-		_, _ = fmt.Fprintf(w, "got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
+		w.Printf("got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
 	}
 
 	podLogsReq := clientset.CoreV1().Pods(ns).GetLogs(createdPod.Name, &corev1.PodLogOptions{
@@ -323,11 +326,11 @@ func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface,
 	})
 	podLogs, err := podLogsReq.Stream(ctx)
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "failed to get logs for migration pod %s: %v\n", createdPod.Name, err)
+		w.Printf("failed to get logs for migration pod %s: %v\n", createdPod.Name, err)
 		// os.Exit(1) // TODO handle
 	}
 
-	_, _ = fmt.Fprintf(w, "migrating PVC %s:\n", sourcePvcName)
+	w.Printf("migrating PVC %s:\n", sourcePvcName)
 	for {
 		bufPodLogs := bufio.NewReader(podLogs)
 		line, _, err := bufPodLogs.ReadLine()
@@ -335,22 +338,22 @@ func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface,
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			_, _ = fmt.Fprintf(w, "failed to read pod logs: %v\n", err)
+			w.Printf("failed to read pod logs: %v\n", err)
 			break
 		}
 		if verboseCopy {
-			_, _ = fmt.Fprintf(w, "    %s\n", line)
+			w.Printf("    %s\n", line)
 		} else {
-			_, _ = fmt.Fprintf(w, ".") // one dot per line of output
+			_, _ = fmt.Fprintf(w.Writer(), ".") // one dot per line of output
 		}
 	}
 	if !verboseCopy {
-		_, _ = fmt.Fprintf(w, "done!\n") // add a newline at the end of the dots if not showing pod logs
+		_, _ = fmt.Fprintf(w.Writer(), "done!\n") // add a newline at the end of the dots if not showing pod logs
 	}
 
 	err = podLogs.Close()
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "failed to close logs for migration pod %s: %v\n", createdPod.Name, err)
+		w.Printf("failed to close logs for migration pod %s: %v\n", createdPod.Name, err)
 		// os.Exit(1) // TODO handle
 	}
 
@@ -370,7 +373,7 @@ func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface,
 		time.Sleep(time.Second * 5)
 	}
 
-	_, _ = fmt.Fprintf(w, "finished migrating PVC %s\n", sourcePvcName)
+	w.Printf("finished migrating PVC %s\n", sourcePvcName)
 	return nil
 }
 
@@ -450,7 +453,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to PVC names to PV reclaim policies
 // an array of the original PV names being migrated
 // an array of namespaces that the PVCs were found within
-func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, sourceSCName, destSCName string) (map[string][]corev1.PersistentVolumeClaim, map[string][]corev1.PersistentVolumeClaim, map[string]map[string]corev1.PersistentVolumeReclaimPolicy, []string, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string) (map[string][]corev1.PersistentVolumeClaim, map[string][]corev1.PersistentVolumeClaim, map[string]map[string]corev1.PersistentVolumeReclaimPolicy, []string, []string, error) {
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -463,7 +466,7 @@ func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 			matchingPVs = append(matchingPVs, pv)
 			originalPVNames = append(originalPVNames, pv.Name)
 		} else {
-			_, _ = fmt.Fprintf(w, "PV %s does not match source SC %s, not migrating\n", pv.Name, sourceSCName)
+			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, sourceSCName)
 		}
 	}
 
@@ -490,8 +493,8 @@ func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nFound %d matching PVCs to migrate across %d namespaces:\n", len(originalPVNames), len(matchingPVCs))
-	tw := tabwriter.NewWriter(w, 2, 2, 1, ' ', 0)
+	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", len(originalPVNames), len(matchingPVCs))
+	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "namespace:\tpvc:\tpv:\t\n")
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
@@ -504,7 +507,7 @@ func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	// create new PVCs for each matching PVC
-	_, _ = fmt.Fprintf(w, "\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
+	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
 	newPVCs := map[string][]corev1.PersistentVolumeClaim{}
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
@@ -521,7 +524,7 @@ func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 					existingSize := existingPVC.Spec.Resources.Requests.Storage().String()
 					desiredSize := nsPvc.Spec.Resources.Requests.Storage().String() // TODO: this should use the size of the PV, not the size of the PVC
 					if existingSize == desiredSize {
-						_, _ = fmt.Fprintf(w, "found existing PVC with name %s, not creating new one\n", newName)
+						w.Printf("found existing PVC with name %s, not creating new one\n", newName)
 						newPVCs[ns] = append(newPVCs[ns], *existingPVC)
 						continue
 					} else {
@@ -554,7 +557,7 @@ func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 			if err != nil {
 				return nil, nil, nil, nil, nil, fmt.Errorf("failed to create new PVC %s in %s: %w", newName, ns, err)
 			}
-			_, _ = fmt.Fprintf(w, "created new PVC %s with size %v in %s\n", newName, newPVC.Spec.Resources.Requests.Storage().String(), ns)
+			w.Printf("created new PVC %s with size %v in %s\n", newName, newPVC.Spec.Resources.Requests.Storage().String(), ns)
 			newPVCs[ns] = append(newPVCs[ns], *newPVC)
 		}
 	}
@@ -562,16 +565,16 @@ func getPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	return matchingPVCs, newPVCs, originalRetentionPolicies, originalPVNames, namespaces, nil
 }
 
-func validateStorageClasses(ctx context.Context, w io.Writer, clientset k8sclient.Interface, sourceSCName string, destSCName string) error {
+func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string) error {
 	// get storage providers
 	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get StorageClasses: %w", err)
 	}
-	_, _ = fmt.Fprintf(w, "\nFound %d StorageClasses:\n", len(storageClasses.Items))
+	w.Printf("\nFound %d StorageClasses:\n", len(storageClasses.Items))
 	sourceScFound, destScFound := false, false
 	for _, sc := range storageClasses.Items {
-		_, _ = fmt.Fprintf(w, "%s\n", sc.Name)
+		w.Printf("%s\n", sc.Name)
 		if sc.Name == sourceSCName {
 			sourceScFound = true
 		}
@@ -585,7 +588,7 @@ func validateStorageClasses(ctx context.Context, w io.Writer, clientset k8sclien
 	if !destScFound {
 		return fmt.Errorf("unable to find dest StorageClass %s", destSCName)
 	}
-	_, _ = fmt.Fprintf(w, "\nMigrating data from %s to %s\n", sourceSCName, destSCName)
+	w.Printf("\nMigrating data from %s to %s\n", sourceSCName, destSCName)
 	return nil
 }
 
@@ -598,7 +601,7 @@ func originalPvcName(newName string) string {
 }
 
 // get a PV, apply the selected mutator to the PV, update the PV, use the supplied validator to wait for the update to show up
-func mutatePV(ctx context.Context, w io.Writer, clientset k8sclient.Interface, pvName string, mutator func(volume *corev1.PersistentVolume) *corev1.PersistentVolume, checker func(volume *corev1.PersistentVolume) bool) error {
+func mutatePV(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, pvName string, mutator func(volume *corev1.PersistentVolume) *corev1.PersistentVolume, checker func(volume *corev1.PersistentVolume) bool) error {
 	tries := 0
 	for {
 		pv, err := clientset.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
@@ -614,7 +617,7 @@ func mutatePV(ctx context.Context, w io.Writer, clientset k8sclient.Interface, p
 				if tries > 5 {
 					return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
 				}
-				_, _ = fmt.Fprintf(w, "Got conflict updating PV %s, waiting 5s to retry\n", pvName)
+				w.Printf("Got conflict updating PV %s, waiting 5s to retry\n", pvName)
 				time.Sleep(time.Second * 5)
 				tries++
 				continue
@@ -639,7 +642,7 @@ func mutatePV(ctx context.Context, w io.Writer, clientset k8sclient.Interface, p
 }
 
 // TODO: add waitForCleanup param to allow testing this
-func scaleDownPods(ctx context.Context, w io.Writer, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim) error {
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim) error {
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
@@ -665,8 +668,8 @@ func scaleDownPods(ctx context.Context, w io.Writer, clientset k8sclient.Interfa
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nFound %d matching pods to migrate across %d namespaces:\n", matchingPodsCount, len(matchingPods))
-	tw := tabwriter.NewWriter(w, 2, 2, 1, ' ', 0)
+	w.Printf("\nFound %d matching pods to migrate across %d namespaces:\n", matchingPodsCount, len(matchingPods))
+	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "namespace:\tpod:\t\n")
 	for ns, nsPods := range matchingPods {
 		for _, nsPod := range nsPods {
@@ -699,7 +702,7 @@ func scaleDownPods(ctx context.Context, w io.Writer, clientset k8sclient.Interfa
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "\nScaling down StatefulSets and Deployments with matching PVCs\n")
+	w.Printf("\nScaling down StatefulSets and Deployments with matching PVCs\n")
 	migrationStartTime := time.Now()
 	// record, log and scale things controlling specified pods
 	for ns, nsOwners := range matchingOwners {
@@ -727,7 +730,7 @@ func scaleDownPods(ctx context.Context, w io.Writer, clientset k8sclient.Interfa
 						ss.ObjectMeta.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
 					}
 
-					_, _ = fmt.Fprintf(w, "scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
+					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
@@ -753,7 +756,7 @@ func scaleDownPods(ctx context.Context, w io.Writer, clientset k8sclient.Interfa
 						dep.ObjectMeta.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
 					}
 
-					_, _ = fmt.Fprintf(w, "scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
+					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
@@ -766,7 +769,7 @@ func scaleDownPods(ctx context.Context, w io.Writer, clientset k8sclient.Interfa
 	}
 
 	// wait for all pods to be deleted
-	_, _ = fmt.Fprintf(w, "\nWaiting for pods with mounted PVCs to be cleaned up\n")
+	w.Printf("\nWaiting for pods with mounted PVCs to be cleaned up\n")
 checkPvcPodLoop:
 	for true {
 		time.Sleep(time.Second * 5) // don't check too often, as this loop is relatively expensive
@@ -785,7 +788,7 @@ checkPvcPodLoop:
 									return fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
 								}
 
-								_, _ = fmt.Fprintf(w, "Found pod %s in %s mounting to-be-migrated PVC %s, sleeping again\n", nsPod.Name, ns, nsClaim.Name)
+								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, sleeping again\n", nsPod.Name, ns, nsClaim.Name)
 								continue checkPvcPodLoop // as soon as we find a matching pod, we know we need to wait another 30s
 							}
 						}
@@ -797,12 +800,12 @@ checkPvcPodLoop:
 		break // no matching pods with PVCs, so good to continue
 	}
 
-	_, _ = fmt.Fprintf(w, "All pods removed successfully\n")
+	w.Printf("All pods removed successfully\n")
 	return nil
 }
 
-func scaleUpPods(ctx context.Context, w io.Writer, clientset k8sclient.Interface, namespaces []string) error {
-	_, _ = fmt.Fprintf(w, "\nScaling back StatefulSets and Deployments with matching PVCs\n")
+func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, namespaces []string) error {
+	w.Printf("\nScaling back StatefulSets and Deployments with matching PVCs\n")
 	for _, ns := range namespaces {
 		// get statefulsets and reset the scale (and remove the annotation in the process)
 		sses, err := clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
@@ -819,7 +822,7 @@ func scaleUpPods(ctx context.Context, w io.Writer, clientset k8sclient.Interface
 				desiredScaleInt32 := int32(desiredScaleInt)
 				ss.Spec.Replicas = &desiredScaleInt32
 
-				_, _ = fmt.Fprintf(w, "scaling StatefulSet %s from 0 to %d in %s\n", ss.Name, desiredScaleInt32, ns)
+				w.Printf("scaling StatefulSet %s from 0 to %d in %s\n", ss.Name, desiredScaleInt32, ns)
 
 				_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, &ss, metav1.UpdateOptions{})
 				if err != nil {
@@ -843,7 +846,7 @@ func scaleUpPods(ctx context.Context, w io.Writer, clientset k8sclient.Interface
 				desiredScaleInt32 := int32(desiredScaleInt)
 				dep.Spec.Replicas = &desiredScaleInt32
 
-				_, _ = fmt.Fprintf(w, "scaling Deployment %s from 0 to %d in %s\n", dep.Name, desiredScaleInt32, ns)
+				w.Printf("scaling Deployment %s from 0 to %d in %s\n", dep.Name, desiredScaleInt32, ns)
 
 				_, err = clientset.AppsV1().Deployments(ns).Update(ctx, &dep, metav1.UpdateOptions{})
 				if err != nil {

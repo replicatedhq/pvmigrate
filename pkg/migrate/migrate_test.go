@@ -253,7 +253,7 @@ func TestMutatePV(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
-			err := mutatePV(clientset, test.pvname, test.ttmutator, test.ttchecker)
+			err := mutatePV(testWriter{t: t}, clientset, test.pvname, test.ttmutator, test.ttchecker)
 			assert.NoError(t, err)
 
 			err = test.validate(clientset, t)

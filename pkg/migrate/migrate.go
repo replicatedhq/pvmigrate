@@ -64,12 +64,12 @@ func Cli() {
 func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCopy bool) error {
 	err := validateStorageClasses(ctx, w, clientset, sourceSCName, destSCName)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err
 	}
 
 	matchingPVCs, newPVCs, originalRetentionPolicies, originalPVNames, namespaces, err := getPVCs(ctx, w, clientset, sourceSCName, destSCName)
 	if err != nil {
-		return fmt.Errorf("%s", err)
+		return err
 	}
 
 	err = scaleDownPods(ctx, w, clientset, matchingPVCs)
@@ -77,162 +77,9 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	// create a pod for each PVC migration, and wait for it to finish
-	_, _ = fmt.Fprintf(w, "\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
-	for ns, nsPvcs := range matchingPVCs {
-		for _, nsPvc := range nsPvcs {
-			sourcePvcName, destPvcName := nsPvc.Name, newPvcName(nsPvc.Name)
-			_, _ = fmt.Fprintf(w, "Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
-
-			createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Pod",
-					APIVersion: "v1",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "migrate-" + sourcePvcName,
-					Namespace: ns,
-					Labels: map[string]string{
-						baseAnnotation: sourcePvcName,
-					},
-				},
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Volumes: []corev1.Volume{
-						{
-							Name: "source",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: sourcePvcName,
-								},
-							},
-						},
-						{
-							Name: "dest",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: destPvcName,
-								},
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  "pvmigrate-" + sourcePvcName,
-							Image: rsyncImage,
-							Command: []string{
-								"rsync",
-							},
-							Args: []string{
-								"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
-								"-v",       // show verbose output
-								"-P",       // show progress, and resume aborted/partial transfers
-								"--delete", // delete files in dest that are not in source
-								"/source/",
-								"/dest",
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									MountPath: "/source",
-									Name:      "source",
-								},
-								{
-									MountPath: "/dest",
-									Name:      "dest",
-								},
-							},
-						},
-					},
-				},
-			}, metav1.CreateOptions{})
-			if err != nil {
-				_, _ = fmt.Fprintf(w, "failed to create pod to migrate PVC %s to %s in %s: %v\n", sourcePvcName, destPvcName, ns, err)
-				// os.Exit(1)
-				continue
-			}
-			_, _ = fmt.Fprintf(w, "waiting for pod %s to start in %s\n", createdPod.Name, createdPod.Namespace)
-
-			// wait for the pod to be created
-			time.Sleep(time.Second * 1)
-			for {
-				gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
-				if err != nil {
-					_, _ = fmt.Fprintf(w, "failed to get newly created migration pod %s: %v\n", createdPod.Name, err)
-					continue
-				}
-
-				if gotPod.Status.Phase == corev1.PodPending {
-					time.Sleep(time.Second * 1)
-					continue
-				}
-
-				if gotPod.Status.Phase == corev1.PodRunning || gotPod.Status.Phase == corev1.PodSucceeded {
-					// time to get logs
-					break
-				}
-
-				_, _ = fmt.Fprintf(w, "got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
-			}
-
-			podLogsReq := clientset.CoreV1().Pods(ns).GetLogs(createdPod.Name, &corev1.PodLogOptions{
-				Follow: true,
-			})
-			podLogs, err := podLogsReq.Stream(ctx)
-			if err != nil {
-				_, _ = fmt.Fprintf(w, "failed to get logs for migration pod %s: %v\n", createdPod.Name, err)
-				// os.Exit(1) // TODO handle
-			}
-
-			_, _ = fmt.Fprintf(w, "migrating PVC %s:\n", sourcePvcName)
-			for {
-				bufPodLogs := bufio.NewReader(podLogs)
-				line, _, err := bufPodLogs.ReadLine()
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						break
-					}
-					_, _ = fmt.Fprintf(w, "failed to read pod logs: %v\n", err)
-					break
-				}
-				if verboseCopy {
-					_, _ = fmt.Fprintf(w, "    %s\n", line)
-				} else {
-					_, _ = fmt.Fprintf(w, ".") // one dot per line of output
-				}
-			}
-			if !verboseCopy {
-				_, _ = fmt.Fprintf(w, "done!\n") // add a newline at the end of the dots if not showing pod logs
-			}
-
-			err = podLogs.Close()
-			if err != nil {
-				_, _ = fmt.Fprintf(w, "failed to close logs for migration pod %s: %v\n", createdPod.Name, err)
-				// os.Exit(1) // TODO handle
-			}
-
-			// validate that the migration actually completed successfully
-			for true {
-				gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
-				if err != nil {
-					return fmt.Errorf("failed to get the migration pod %s in %s to confirm that it ran successfully: %w", createdPod.Name, ns, err)
-				}
-				if gotPod.Status.Phase == corev1.PodSucceeded {
-					break
-				}
-				if gotPod.Status.Phase != corev1.PodRunning {
-					return fmt.Errorf("logs for the migration pod %s in %s ended, but the status was %s and not succeeded", createdPod.Name, ns, gotPod.Status.Phase)
-				}
-
-				time.Sleep(time.Second * 5)
-			}
-
-			_, _ = fmt.Fprintf(w, "finished migrating PVC %s\n", sourcePvcName)
-
-			err = clientset.CoreV1().Pods(ns).Delete(ctx, createdPod.Name, metav1.DeleteOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to delete migration pod %s: %w", createdPod.Name, err)
-			}
-		}
+	err = copyAllPVCs(ctx, w, clientset, sourceSCName, destSCName, rsyncImage, matchingPVCs, verboseCopy)
+	if err != nil {
+		return err
 	}
 
 	// mark previously existing PVs as 'retain' so that when we delete the PVC it does not take the PV with it (in case things go wrong)
@@ -414,6 +261,178 @@ func Migrate(ctx context.Context, w io.Writer, clientset k8sclient.Interface, so
 	}
 
 	_, _ = fmt.Fprintf(w, "\nSuccess!\n")
+	return nil
+}
+
+func copyAllPVCs(ctx context.Context, w io.Writer, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, verboseCopy bool) error {
+	// create a pod for each PVC migration, and wait for it to finish
+	_, _ = fmt.Fprintf(w, "\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
+	for ns, nsPvcs := range matchingPVCs {
+		for _, nsPvc := range nsPvcs {
+			sourcePvcName, destPvcName := nsPvc.Name, newPvcName(nsPvc.Name)
+			_, _ = fmt.Fprintf(w, "Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
+
+			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func copyOnePVC(ctx context.Context, w io.Writer, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool) error {
+	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "migrate-" + sourcePvcName,
+			Namespace: ns,
+			Labels: map[string]string{
+				baseAnnotation: sourcePvcName,
+			},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Volumes: []corev1.Volume{
+				{
+					Name: "source",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: sourcePvcName,
+						},
+					},
+				},
+				{
+					Name: "dest",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: destPvcName,
+						},
+					},
+				},
+			},
+			Containers: []corev1.Container{
+				{
+					Name:  "pvmigrate-" + sourcePvcName,
+					Image: rsyncImage,
+					Command: []string{
+						"rsync",
+					},
+					Args: []string{
+						"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+						"-v",       // show verbose output
+						"-P",       // show progress, and resume aborted/partial transfers
+						"--delete", // delete files in dest that are not in source
+						"/source/",
+						"/dest",
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							MountPath: "/source",
+							Name:      "source",
+						},
+						{
+							MountPath: "/dest",
+							Name:      "dest",
+						},
+					},
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "failed to create pod to migrate PVC %s to %s in %s: %v\n", sourcePvcName, destPvcName, ns, err)
+		// TODO maybe this should be a fatal error
+		return nil
+	}
+	_, _ = fmt.Fprintf(w, "waiting for pod %s to start in %s\n", createdPod.Name, createdPod.Namespace)
+
+	// cleanup pod after completion
+	defer func() {
+		err = clientset.CoreV1().Pods(ns).Delete(context.TODO(), createdPod.Name, metav1.DeleteOptions{})
+		if err != nil {
+			_, _ = fmt.Fprintf(w, "failed to delete migration pod %s: %v", createdPod.Name, err)
+		}
+	}()
+
+	// wait for the pod to be created
+	time.Sleep(time.Second * 1)
+	for {
+		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
+		if err != nil {
+			_, _ = fmt.Fprintf(w, "failed to get newly created migration pod %s: %v\n", createdPod.Name, err)
+			continue
+		}
+
+		if gotPod.Status.Phase == corev1.PodPending {
+			time.Sleep(time.Second * 1)
+			continue
+		}
+
+		if gotPod.Status.Phase == corev1.PodRunning || gotPod.Status.Phase == corev1.PodSucceeded {
+			// time to get logs
+			break
+		}
+
+		_, _ = fmt.Fprintf(w, "got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
+	}
+
+	podLogsReq := clientset.CoreV1().Pods(ns).GetLogs(createdPod.Name, &corev1.PodLogOptions{
+		Follow: true,
+	})
+	podLogs, err := podLogsReq.Stream(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "failed to get logs for migration pod %s: %v\n", createdPod.Name, err)
+		// os.Exit(1) // TODO handle
+	}
+
+	_, _ = fmt.Fprintf(w, "migrating PVC %s:\n", sourcePvcName)
+	for {
+		bufPodLogs := bufio.NewReader(podLogs)
+		line, _, err := bufPodLogs.ReadLine()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			_, _ = fmt.Fprintf(w, "failed to read pod logs: %v\n", err)
+			break
+		}
+		if verboseCopy {
+			_, _ = fmt.Fprintf(w, "    %s\n", line)
+		} else {
+			_, _ = fmt.Fprintf(w, ".") // one dot per line of output
+		}
+	}
+	if !verboseCopy {
+		_, _ = fmt.Fprintf(w, "done!\n") // add a newline at the end of the dots if not showing pod logs
+	}
+
+	err = podLogs.Close()
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "failed to close logs for migration pod %s: %v\n", createdPod.Name, err)
+		// os.Exit(1) // TODO handle
+	}
+
+	// validate that the migration actually completed successfully
+	for true {
+		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get the migration pod %s in %s to confirm that it ran successfully: %w", createdPod.Name, ns, err)
+		}
+		if gotPod.Status.Phase == corev1.PodSucceeded {
+			break
+		}
+		if gotPod.Status.Phase != corev1.PodRunning {
+			return fmt.Errorf("logs for the migration pod %s in %s ended, but the status was %s and not succeeded", createdPod.Name, ns, gotPod.Status.Phase)
+		}
+
+		time.Sleep(time.Second * 5)
+	}
+
+	_, _ = fmt.Fprintf(w, "finished migrating PVC %s\n", sourcePvcName)
 	return nil
 }
 

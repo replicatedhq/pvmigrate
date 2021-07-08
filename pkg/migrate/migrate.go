@@ -240,7 +240,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 	fmt.Printf("\nMarking previously existing PVs as to-be-retained\n")
 	for _, pvname := range originalPVNames {
 		fmt.Printf("Marking PV %s as to-be-retained\n", pvname)
-		err = mutatePV(clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		err = mutatePV(os.Stdout, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 			return volume
 		}, func(volume *corev1.PersistentVolume) bool {
@@ -275,7 +275,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 				// if this PV corresponds to one of the ones we created to migrate to, then set the reclaim policy
 				if isMatch {
 					fmt.Printf("Marking PV %s (PVC %s in %s) as to-be-retained\n", pv.Name, pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace)
-					err = mutatePV(clientset, pv.Name, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+					err = mutatePV(os.Stdout, clientset, pv.Name, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 						volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 						return volume
 					}, func(volume *corev1.PersistentVolume) bool {
@@ -326,7 +326,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 	// original PVs
 	for _, pvname := range originalPVNames {
 		fmt.Printf("Removing claimrefs from PV %s\n", pvname)
-		err = mutatePV(clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		err = mutatePV(os.Stdout, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.ClaimRef = nil
 			return volume
 		}, func(volume *corev1.PersistentVolume) bool {
@@ -345,7 +345,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 	// new PVs
 	for pvname := range desiredPVRetentions {
 		fmt.Printf("Removing claimrefs from PV %s\n", pvname)
-		err = mutatePV(clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		err = mutatePV(os.Stdout, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.ClaimRef = nil
 			return volume
 		}, func(volume *corev1.PersistentVolume) bool {
@@ -385,7 +385,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 
 	fmt.Printf("\nResetting PV retention policies\n")
 	for pvname, desired := range desiredPVRetentions {
-		err = mutatePV(clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		err = mutatePV(os.Stdout, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = desired
 			return volume
 		}, func(volume *corev1.PersistentVolume) bool {
@@ -407,7 +407,7 @@ func Migrate(sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCo
 	// delete migrated PVs
 	fmt.Printf("\nDeleting original PVs\n")
 	for _, pvname := range originalPVNames {
-		err = mutatePV(clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		err = mutatePV(os.Stdout, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 			volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
 			return volume
 		}, func(volume *corev1.PersistentVolume) bool {
@@ -581,17 +581,31 @@ func originalPvcName(newName string) string {
 }
 
 // get a PV, apply the selected mutator to the PV, update the PV, use the supplied validator to wait for the update to show up
-func mutatePV(clientset k8sclient.Interface, pvName string, mutator func(volume *corev1.PersistentVolume) *corev1.PersistentVolume, checker func(volume *corev1.PersistentVolume) bool) error {
-	pv, err := clientset.CoreV1().PersistentVolumes().Get(context.TODO(), pvName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get persistent volumes %s: %w", pvName, err)
-	}
+func mutatePV(w io.Writer, clientset k8sclient.Interface, pvName string, mutator func(volume *corev1.PersistentVolume) *corev1.PersistentVolume, checker func(volume *corev1.PersistentVolume) bool) error {
+	tries := 0
+	for {
+		pv, err := clientset.CoreV1().PersistentVolumes().Get(context.TODO(), pvName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get persistent volumes %s: %w", pvName, err)
+		}
 
-	pv = mutator(pv)
+		pv = mutator(pv)
 
-	_, err = clientset.CoreV1().PersistentVolumes().Update(context.TODO(), pv, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
+		_, err = clientset.CoreV1().PersistentVolumes().Update(context.TODO(), pv, metav1.UpdateOptions{})
+		if err != nil {
+			if k8serrors.IsConflict(err) {
+				if tries > 5 {
+					return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
+				}
+				fmt.Fprintf(w, "Got conflict updating PV %s, waiting 5s to retry\n", pvName)
+				time.Sleep(time.Second * 5)
+				tries++
+				continue
+			} else {
+				return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
+			}
+		}
+		break
 	}
 
 	for {

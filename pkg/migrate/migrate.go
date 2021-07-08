@@ -597,8 +597,8 @@ func mutatePV(w io.Writer, clientset k8sclient.Interface, pvName string, mutator
 				if tries > 5 {
 					return fmt.Errorf("failed to mutate PV %s: %w", pvName, err)
 				}
-				time.Sleep(time.Second * 5)
 				fmt.Fprintf(w, "Got conflict updating PV %s, waiting 5s to retry\n", pvName)
+				time.Sleep(time.Second * 5)
 				tries++
 				continue
 			} else {

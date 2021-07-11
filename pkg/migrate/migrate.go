@@ -24,6 +24,9 @@ import (
 const baseAnnotation = "kurl.sh/pvcmigrate"
 const scaleAnnotation = baseAnnotation + "-scale"
 const kindAnnotation = baseAnnotation + "-kind"
+const sourceNsAnnotation = baseAnnotation + "-sourcens"
+const sourcePvcAnnotation = baseAnnotation + "-sourcepvc"
+const desiredReclaimAnnotation = baseAnnotation + "-reclaim"
 
 // Cli uses CLI options to run Migrate
 func Cli() {
@@ -70,7 +73,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	matchingPVCs, newPVCs, originalRetentionPolicies, originalPVNames, namespaces, err := getPVCs(ctx, w, clientset, sourceSCName, destSCName)
+	matchingPVCs, _, _, _, namespaces, err := getPVCs(ctx, w, clientset, sourceSCName, destSCName)
 	if err != nil {
 		return err
 	}
@@ -85,156 +88,12 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	// mark previously existing PVs as 'retain' so that when we delete the PVC it does not take the PV with it (in case things go wrong)
-	w.Printf("\nMarking previously existing PVs as to-be-retained\n")
-	for _, pvname := range originalPVNames {
-		w.Printf("Marking PV %s as to-be-retained\n", pvname)
-		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
-			volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-			return volume
-		}, func(volume *corev1.PersistentVolume) bool {
-			return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain
-		})
-		if err != nil {
-			return fmt.Errorf("failed to set PV reclaim policy: %w", err)
-		}
-	}
-
-	// mark newly created PVs as 'retain'
-	w.Printf("\nMarking newly-created existing PVs as to-be-retained\n")
-	allPVs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get persistent volumes: %w", err)
-	}
-	desiredPVRetentions := map[string]corev1.PersistentVolumeReclaimPolicy{}
-	for _, pv := range allPVs.Items {
-		if pv.Spec.StorageClassName == destSCName && pv.Spec.ClaimRef != nil {
-			if newNsPVCs, ok := newPVCs[pv.Spec.ClaimRef.Namespace]; ok {
-				isMatch := false
-				for idx, newNsPvc := range newNsPVCs {
-					if newNsPvc.Name == pv.Spec.ClaimRef.Name {
-						isMatch = true
-						newPVCs[pv.Spec.ClaimRef.Namespace][idx].Spec.VolumeName = pv.Name // ensure that the PVC has a PV name associated with it, as we use that again later
-						break
-					}
-				}
-
-				// if this PV corresponds to one of the ones we created to migrate to, then set the reclaim policy
-				if isMatch {
-					w.Printf("Marking PV %s (PVC %s in %s) as to-be-retained\n", pv.Name, pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace)
-					err = mutatePV(ctx, w, clientset, pv.Name, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
-						volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-						return volume
-					}, func(volume *corev1.PersistentVolume) bool {
-						return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain
-					})
-					if err != nil {
-						return fmt.Errorf("failed to set PV reclaim policy: %w", err)
-					}
-
-					desiredPVRetentions[pv.Name] = originalRetentionPolicies[pv.Spec.ClaimRef.Namespace][originalPvcName(pv.Spec.ClaimRef.Name)]
-				}
-			}
-		}
-	}
-
-	// delete all the original PVCs to free up names
-	w.Printf("\nDeleting original PVCs to free up names\n")
 	for ns, nsPVCs := range matchingPVCs {
 		for _, nsPVC := range nsPVCs {
-			w.Printf("Deleting original PVC %s in %s\n", nsPVC.Name, ns)
-
-			// delete the PVC so that we can create a new PVC with the original name
-			err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, nsPVC.Name, metav1.DeleteOptions{})
+			err = swapPVs(ctx, w, clientset, ns, nsPVC.Name)
 			if err != nil {
-				return fmt.Errorf("failed to delete PVC %s of ns %s to allow a new one to be created: %w", nsPVC.Name, ns, err)
+				return fmt.Errorf("failed to swap PVs for PVC %s in %s: %w", nsPVC.Name, ns, err)
 			}
-		}
-	}
-
-	// delete migrated-to PVCs to free up PVs
-	w.Printf("\nDeleting migrated-to PVCs to free up PVs\n")
-	for ns, nsPVCs := range newPVCs {
-		for _, nsPVC := range nsPVCs {
-			w.Printf("Deleting migrated PVC %s in %s\n", nsPVC.Name, ns)
-
-			// delete the PVC so that we can create a new PVC with the original name
-			err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, nsPVC.Name, metav1.DeleteOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to delete PVC %s of ns %s to allow a new one to be created: %w", nsPVC.Name, ns, err)
-			}
-		}
-	}
-
-	w.Printf("\nRemoving claimrefs from PVs to attach new PVCs\n")
-	// original PVs
-	for _, pvname := range originalPVNames {
-		w.Printf("Removing claimrefs from PV %s\n", pvname)
-		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
-			volume.Spec.ClaimRef = nil
-			return volume
-		}, func(volume *corev1.PersistentVolume) bool {
-			if volume.Spec.ClaimRef == nil {
-				return true
-			}
-			w.Printf("claimref for %s: %+v\n", pvname, volume.Spec.ClaimRef)
-			return false
-		})
-		if err != nil {
-			return fmt.Errorf("failed to remove claimrefs from PV %s: %w", pvname, err)
-		}
-	}
-
-	// new PVs
-	for pvname := range desiredPVRetentions {
-		w.Printf("Removing claimrefs from PV %s\n", pvname)
-		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
-			volume.Spec.ClaimRef = nil
-			return volume
-		}, func(volume *corev1.PersistentVolume) bool {
-			if volume.Spec.ClaimRef == nil {
-				return true
-			}
-			w.Printf("claimref for %s: %+v\n", pvname, volume.Spec.ClaimRef)
-			return false
-		})
-		if err != nil {
-			return fmt.Errorf("failed to remove claimrefs from PV %s: %w", pvname, err)
-		}
-	}
-
-	w.Printf("\nCreating new PVCs with the original names\n")
-	// make a new PVC with the updated name that owns the PV in question
-	for ns, nsPVCs := range newPVCs { // TODO: change this to be for each old PVC, so that we retain annotations/labels/access modes
-		for _, newPVC := range nsPVCs {
-			originalName := originalPvcName(newPVC.Name)
-			w.Printf("Creating PVC %s in %s using PV %s\n", originalName, ns, newPVC.Spec.VolumeName)
-
-			// create a new PVC referencing the PV we copied data to, but with the original name
-			newPVC.Status = corev1.PersistentVolumeClaimStatus{}
-			newPVC.ObjectMeta = metav1.ObjectMeta{
-				Name:      originalName,
-				Namespace: ns,
-			}
-			newPVC.Spec.DataSource = nil
-			_, err = clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &newPVC, metav1.CreateOptions{})
-			if err != nil {
-				w.Printf("failed to create PVC %s of ns %s with intended PV %s, you will likely need to do this manually: %v\n", originalName, ns, newPVC.Spec.VolumeName, err)
-				delete(desiredPVRetentions, newPVC.Spec.VolumeName) // don't reset retention policies if the PVC wasn't able to be created
-			}
-		}
-	}
-
-	w.Printf("\nResetting PV retention policies\n")
-	for pvname, desired := range desiredPVRetentions {
-		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
-			volume.Spec.PersistentVolumeReclaimPolicy = desired
-			return volume
-		}, func(volume *corev1.PersistentVolume) bool {
-			return volume.Spec.PersistentVolumeReclaimPolicy == desired
-		})
-		if err != nil {
-			return fmt.Errorf("failed to return PV reclaim policy: %w", err)
 		}
 	}
 
@@ -242,25 +101,6 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	err = scaleUpPods(ctx, w, clientset, namespaces)
 	if err != nil {
 		return fmt.Errorf("failed to scale up pods: %w", err)
-	}
-
-	// delete migrated PVs
-	w.Printf("\nDeleting original PVs\n")
-	for _, pvname := range originalPVNames {
-		err = mutatePV(ctx, w, clientset, pvname, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
-			volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
-			return volume
-		}, func(volume *corev1.PersistentVolume) bool {
-			return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete
-		})
-		if err != nil {
-			w.Printf("failed to mark old and redundant PV %s as having a reclaim policy of 'Delete': %v\n", pvname, err)
-		}
-
-		err = clientset.CoreV1().PersistentVolumes().Delete(ctx, pvname, metav1.DeleteOptions{})
-		if err != nil {
-			w.Printf("failed to remove old and redundant PV %s: %v\n", pvname, err)
-		}
 	}
 
 	w.Printf("\nSuccess!\n")
@@ -548,7 +388,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					StorageClassName: &destSCName,
-					Resources:        nsPvc.Spec.Resources,
+					Resources:        nsPvc.Spec.Resources, // TODO: this should be based on the PV resources, not the PVC
 					AccessModes: []corev1.PersistentVolumeAccessMode{
 						corev1.ReadWriteOnce,
 					},
@@ -857,5 +697,169 @@ func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 
 		// TODO: handle other owner kinds
 	}
+	return nil
+}
+
+// given the name of a PVC, swap the underlying PV with the one used by <pvcname>-pvcmigrate, delete the PVC <pvcname>-migrate, and delete the original PV
+func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, pvcName string) error {
+	w.Printf("\nSwapping PVC %s in %s to the new StorageClass", pvcName, ns)
+
+	// get the two relevant PVCs - the (original) one that has the name we want, and the one that has the PV we want
+	originalPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get original PVC %s in %s: %w", pvcName, ns, err)
+	}
+	migratedPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, newPvcName(pvcName), metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get migrated PVC %s in %s: %w", newPvcName(pvcName), ns, err)
+	}
+
+	// mark PVs used by both originalPVC and migratedPVC as to-be-retained
+	w.Printf("Marking original PV %s as to-be-retained\n", originalPVC.Spec.VolumeName)
+	var originalReclaim corev1.PersistentVolumeReclaimPolicy
+	err = mutatePV(ctx, w, clientset, originalPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		originalReclaim = volume.Spec.PersistentVolumeReclaimPolicy
+		volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		return volume
+	}, func(volume *corev1.PersistentVolume) bool {
+		return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set original PV reclaim policy: %w", err)
+	}
+
+	w.Printf("Marking migrated-to PV %s as to-be-retained\n", migratedPVC.Spec.VolumeName)
+	err = mutatePV(ctx, w, clientset, migratedPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		// add annotations describing what PVC this data came from in case of a failure later
+		volume.Annotations[sourceNsAnnotation] = ns
+		volume.Annotations[sourcePvcAnnotation] = pvcName
+
+		// this will be used to set the reclaim policy after attaching a new PVC
+		volume.Annotations[desiredReclaimAnnotation] = string(originalReclaim)
+
+		volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		return volume
+	}, func(volume *corev1.PersistentVolume) bool {
+		return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set migratede-to PV reclaim policy: %w", err)
+	}
+
+	// delete both the original and migrated-to PVCs
+	w.Printf("Deleting original PVC %s in %s to free up the name\n", pvcName, ns)
+	err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcName, metav1.DeleteOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete original PVC %s in %s: %w", pvcName, ns, err)
+	}
+	w.Printf("Deleting migrated-to PVC %s in %s to release the PV\n", pvcName, ns)
+	err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, newPvcName(pvcName), metav1.DeleteOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)
+	}
+
+	// remove claimrefs from original and migrated-to PVs
+	w.Printf("Removing claimref from original PV %s\n", originalPVC.Spec.VolumeName)
+	err = mutatePV(ctx, w, clientset, originalPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		volume.Spec.ClaimRef = nil
+		return volume
+	}, func(volume *corev1.PersistentVolume) bool {
+		if volume.Spec.ClaimRef == nil {
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove claimrefs from PV %s: %w", originalPVC.Spec.VolumeName, err)
+	}
+	w.Printf("Removing claimref from migrated-to PV %s\n", migratedPVC.Spec.VolumeName)
+	err = mutatePV(ctx, w, clientset, migratedPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		volume.Spec.ClaimRef = nil
+		return volume
+	}, func(volume *corev1.PersistentVolume) bool {
+		if volume.Spec.ClaimRef == nil {
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove claimrefs from PV %s: %w", migratedPVC.Spec.VolumeName, err)
+	}
+
+	// create new PVC with the old name/annotations/settings, and the new PV
+	w.Printf("Creating new PVC %s with migrated-to PV %s\n", originalPVC.Name, migratedPVC.Spec.VolumeName)
+	newPVC := corev1.PersistentVolumeClaim{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       originalPVC.Kind,
+			APIVersion: originalPVC.APIVersion,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      originalPVC.Name,
+			Namespace: originalPVC.Namespace,
+			Labels:    originalPVC.Labels, // copy labels, don't copy annotations
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: originalPVC.Spec.AccessModes,
+			Resources:   originalPVC.Spec.Resources,
+			VolumeMode:  originalPVC.Spec.VolumeMode,
+
+			// from migrated-to PVC
+			StorageClassName: migratedPVC.Spec.StorageClassName,
+			VolumeName:       migratedPVC.Spec.VolumeName,
+		},
+	}
+	_, err = clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &newPVC, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create migrated-to PVC %s in %s: %w", pvcName, ns, err)
+	}
+
+	// return the PVs retain policy
+	w.Printf("Resetting migrated-to PV %s reclaim policy\n", migratedPVC.Spec.VolumeName)
+	err = resetReclaimPolicy(ctx, w, clientset, migratedPVC.Spec.VolumeName, &originalReclaim)
+	if err != nil {
+		return err
+	}
+
+	// delete the original PV
+	w.Printf("Deleting original, now redundant, PV %s\n", originalPVC.Spec.VolumeName)
+	err = clientset.CoreV1().PersistentVolumes().Delete(ctx, originalPVC.Spec.VolumeName, metav1.DeleteOptions{})
+	if err != nil {
+		w.Printf("Unable to cleanup redundant PV %s: %s\n", originalPVC.Spec.VolumeName, err.Error())
+	}
+
+	// success message
+	w.Printf("Successfully migrated PVC %s in %s from PV %s to %s\n", pvcName, ns, originalPVC.Spec.VolumeName, migratedPVC.Spec.VolumeName)
+	return nil
+}
+
+// reset the reclaim policy of the specified PV.
+// If 'reclaim' is non-nil, that value will be used, otherwise the value will be taken from the annotation.
+// If 'reclaim' is not specified and the annotation does not exist, the reclaim policy will not be updated.
+// in either case, the annotation will be removed.
+func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, pvName string, reclaim *corev1.PersistentVolumeReclaimPolicy) error {
+	err := mutatePV(ctx, w, clientset, pvName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+		if reclaim != nil {
+			volume.Spec.PersistentVolumeReclaimPolicy = *reclaim
+		} else {
+			if annotationVal, ok := volume.Annotations[desiredReclaimAnnotation]; ok {
+				volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimPolicy(annotationVal)
+			}
+		}
+		return volume
+	}, func(volume *corev1.PersistentVolume) bool {
+		if reclaim != nil {
+			return volume.Spec.PersistentVolumeReclaimPolicy == *reclaim
+		} else {
+			if annotationVal, ok := volume.Annotations[desiredReclaimAnnotation]; ok {
+				return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimPolicy(annotationVal)
+			}
+		}
+
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reset PV reclaim policy: %w", err)
+	}
+
 	return nil
 }

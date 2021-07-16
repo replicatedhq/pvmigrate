@@ -849,10 +849,10 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 	}, func(volume *corev1.PersistentVolume) bool {
 		if reclaim != nil {
 			return volume.Spec.PersistentVolumeReclaimPolicy == *reclaim
-		} else {
-			if annotationVal, ok := volume.Annotations[desiredReclaimAnnotation]; ok {
-				return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimPolicy(annotationVal)
-			}
+		}
+
+		if annotationVal, ok := volume.Annotations[desiredReclaimAnnotation]; ok {
+			return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimPolicy(annotationVal)
 		}
 
 		return true

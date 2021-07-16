@@ -722,3 +722,249 @@ func Test_createMigrationPod(t *testing.T) {
 		})
 	}
 }
+
+func Test_swapPVs(t *testing.T) {
+	sourceScName := "sourceScName"
+	destScName := "destScName"
+	tests := []struct {
+		name      string
+		resources []runtime.Object
+		wantPVs   []corev1.PersistentVolume
+		wantPVCs  []corev1.PersistentVolumeClaim
+		ns        string
+		pvcName   string
+		wantErr   bool
+	}{
+		{
+			name:    "swap one PVC",
+			ns:      "testns",
+			pvcName: "sourcepvc",
+			resources: []runtime.Object{
+				// two PVCs
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "testns",
+						Annotations: map[string]string{
+							"testannotation": "sourcepvc",
+						},
+						Labels: map[string]string{
+							"testlabel": "sourcepvc",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+						StorageClassName: &sourceScName,
+						VolumeName:       "source-pv",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						Phase: corev1.ClaimBound,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc-pvcmigrate",
+						Namespace: "testns",
+						Annotations: map[string]string{
+							"testannotation": "sourcepvc-pvcmigrate",
+						},
+						Labels: map[string]string{
+							"testlabel": "sourcepvc-pvcmigrate",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+						StorageClassName: &destScName,
+						VolumeName:       "dest-pv",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						Phase: corev1.ClaimBound,
+					},
+				},
+				// two PVs
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "source-pv",
+						Labels: map[string]string{
+							"testlabel": "source-pv",
+						},
+						Annotations: map[string]string{
+							"testannotation": "source-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						StorageClassName:              sourceScName,
+					},
+					Status: corev1.PersistentVolumeStatus{
+						Phase: corev1.VolumeBound,
+					},
+				},
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dest-pv",
+						Labels: map[string]string{
+							"testlabel": "dest-pv",
+						},
+						Annotations: map[string]string{
+							"testannotation": "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc-pvcmigrate",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						StorageClassName:              sourceScName,
+					},
+					Status: corev1.PersistentVolumeStatus{
+						Phase: corev1.VolumeBound,
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dest-pv",
+						Labels: map[string]string{
+							"testlabel": "dest-pv",
+						},
+						Annotations: map[string]string{
+							desiredReclaimAnnotation: "Delete",
+							sourceNsAnnotation:       "testns",
+							sourcePvcAnnotation:      "sourcepvc",
+							"testannotation":         "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						StorageClassName:              sourceScName,
+					},
+					Status: corev1.PersistentVolumeStatus{
+						Phase: corev1.VolumeBound,
+					},
+				},
+			},
+			wantPVCs: []corev1.PersistentVolumeClaim{
+				{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "testns",
+						Labels: map[string]string{
+							"testlabel": "sourcepvc",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+						StorageClassName: &destScName,
+						VolumeName:       "dest-pv",
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := swapPVs(context.Background(), testlog, clientset, tt.ns, tt.pvcName)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+
+			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantPVs, finalPVs.Items)
+
+			finalPVCs, err := clientset.CoreV1().PersistentVolumeClaims(tt.ns).List(context.Background(), metav1.ListOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantPVCs, finalPVCs.Items)
+		})
+	}
+}

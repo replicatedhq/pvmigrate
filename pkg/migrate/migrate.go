@@ -16,6 +16,7 @@ import (
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -298,9 +299,11 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return nil, nil, fmt.Errorf("failed to get persistent volumes: %w", err)
 	}
 	matchingPVs := []corev1.PersistentVolume{}
+	pvsByName := map[string]corev1.PersistentVolume{}
 	for _, pv := range pvs.Items {
 		if pv.Spec.StorageClassName == sourceSCName {
 			matchingPVs = append(matchingPVs, pv)
+			pvsByName[pv.Name] = pv
 		} else {
 			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, sourceSCName)
 		}
@@ -341,6 +344,16 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		for _, nsPvc := range nsPvcs {
 			newName := newPvcName(nsPvc.Name)
 
+			desiredPV, ok := pvsByName[nsPvc.Spec.VolumeName]
+			if !ok {
+				return nil, nil, fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+			}
+
+			desiredPvStorage, ok := desiredPV.Spec.Capacity[corev1.ResourceStorage]
+			if !ok {
+				return nil, nil, fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+			}
+
 			// check to see if the desired PVC name already exists (and is appropriate)
 			existingPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, newName, metav1.GetOptions{})
 			if err != nil {
@@ -350,12 +363,12 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 			} else if existingPVC != nil {
 				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == destSCName {
 					existingSize := existingPVC.Spec.Resources.Requests.Storage().String()
-					desiredSize := nsPvc.Spec.Resources.Requests.Storage().String() // TODO: this should use the size of the PV, not the size of the PVC
-					if existingSize == desiredSize {
+
+					if existingSize == desiredPvStorage.String() {
 						w.Printf("found existing PVC with name %s, not creating new one\n", newName)
 						continue
 					} else {
-						return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredSize, nsPvc.Name)
+						return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.Name)
 					}
 				} else {
 					return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.Name)
@@ -375,7 +388,11 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					StorageClassName: &destSCName,
-					Resources:        nsPvc.Spec.Resources, // TODO: this should be based on the PV resources, not the PVC
+					Resources: corev1.ResourceRequirements{
+						Requests: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: desiredPvStorage,
+						},
+					},
 					AccessModes: []corev1.PersistentVolumeAccessMode{
 						corev1.ReadWriteOnce,
 					},

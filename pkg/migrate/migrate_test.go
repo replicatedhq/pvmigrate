@@ -342,9 +342,6 @@ func TestGetPVCs(t *testing.T) {
 		destScName   string
 		wantErr      bool
 		originalPVCs map[string][]corev1.PersistentVolumeClaim
-		newPVCs      map[string][]corev1.PersistentVolumeClaim
-		reclaims     map[string]map[string]corev1.PersistentVolumeReclaimPolicy
-		pvs          []string
 		namespaces   []string
 		validate     func(clientset k8sclient.Interface, t *testing.T) error
 	}{
@@ -420,30 +417,6 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			newPVCs: map[string][]corev1.PersistentVolumeClaim{
-				"ns1": []corev1.PersistentVolumeClaim{
-					{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "pvc1-pvcmigrate",
-							Namespace: "ns1",
-							Labels: map[string]string{
-								baseAnnotation: "pvc1",
-								kindAnnotation: "dest",
-							},
-						},
-						Spec: corev1.PersistentVolumeClaimSpec{
-							StorageClassName: &dscString,
-							AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-						},
-					},
-				},
-			},
-			reclaims: map[string]map[string]corev1.PersistentVolumeReclaimPolicy{
-				"ns1": {
-					"pvc1": corev1.PersistentVolumeReclaimDelete,
-				},
-			},
-			pvs:        []string{"pv1"},
 			namespaces: []string{"ns1"},
 		},
 
@@ -466,9 +439,6 @@ func TestGetPVCs(t *testing.T) {
 				return nil
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
-			newPVCs:      map[string][]corev1.PersistentVolumeClaim{},
-			reclaims:     map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
-			pvs:          []string{},
 			namespaces:   []string{},
 		},
 
@@ -556,29 +526,6 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			newPVCs: map[string][]corev1.PersistentVolumeClaim{
-				"ns1": []corev1.PersistentVolumeClaim{
-					{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "pvc1-pvcmigrate",
-							Namespace: "ns1",
-							Labels: map[string]string{
-								"test": "retained",
-							},
-						},
-						Spec: corev1.PersistentVolumeClaimSpec{
-							StorageClassName: &dscString,
-							AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-						},
-					},
-				},
-			},
-			reclaims: map[string]map[string]corev1.PersistentVolumeReclaimPolicy{
-				"ns1": {
-					"pvc1": corev1.PersistentVolumeReclaimDelete,
-				},
-			},
-			pvs:        []string{"pv1"},
 			namespaces: []string{"ns1"},
 		},
 
@@ -588,9 +535,6 @@ func TestGetPVCs(t *testing.T) {
 			sourceScName: "",
 			destScName:   "",
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
-			newPVCs:      map[string][]corev1.PersistentVolumeClaim{},
-			reclaims:     map[string]map[string]corev1.PersistentVolumeReclaimPolicy{},
-			pvs:          []string{},
 			namespaces:   []string{},
 			validate: func(clientset k8sclient.Interface, t *testing.T) error {
 				return nil
@@ -602,7 +546,7 @@ func TestGetPVCs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			originalPVCs, newPVCs, reclaims, pvs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName)
+			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName)
 			if !test.wantErr {
 				assert.NoError(t, err)
 			} else {
@@ -614,9 +558,6 @@ func TestGetPVCs(t *testing.T) {
 			assert.NoError(t, err)
 
 			assert.Equal(t, test.originalPVCs, originalPVCs)
-			assert.Equal(t, test.newPVCs, newPVCs)
-			assert.Equal(t, test.reclaims, reclaims)
-			assert.Equal(t, test.pvs, pvs)
 			assert.Equal(t, test.namespaces, nses)
 		})
 	}
@@ -965,6 +906,155 @@ func Test_swapPVs(t *testing.T) {
 			finalPVCs, err := clientset.CoreV1().PersistentVolumeClaims(tt.ns).List(context.Background(), metav1.ListOptions{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantPVCs, finalPVCs.Items)
+		})
+	}
+}
+
+func Test_resetReclaimPolicy(t *testing.T) {
+	retainVar := corev1.PersistentVolumeReclaimRetain
+	tests := []struct {
+		name      string
+		resources []runtime.Object
+		wantPVs   []corev1.PersistentVolume
+		wantPVCs  []corev1.PersistentVolumeClaim
+		pv        string
+		reclaim   *corev1.PersistentVolumeReclaimPolicy
+		wantErr   bool
+	}{
+		{
+			name: "read from annotations",
+			pv:   "pvname",
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvname",
+						Annotations: map[string]string{
+							desiredReclaimAnnotation: "Delete",
+							"testannotation":         "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvname",
+						Annotations: map[string]string{
+							desiredReclaimAnnotation: "Delete",
+							"testannotation":         "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+			},
+		},
+		{
+			name:    "specified reclaim policy overrides annotation",
+			pv:      "pvname",
+			reclaim: &retainVar,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvname",
+						Annotations: map[string]string{
+							desiredReclaimAnnotation: "Delete",
+							"testannotation":         "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvname",
+						Annotations: map[string]string{
+							desiredReclaimAnnotation: "Delete",
+							"testannotation":         "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+					},
+				},
+			},
+		},
+		{
+			name: "no annotation, no reclaim, no change",
+			pv:   "pvname",
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvname",
+						Annotations: map[string]string{
+							"testannotation": "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvname",
+						Annotations: map[string]string{
+							"testannotation": "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := resetReclaimPolicy(context.Background(), testlog, clientset, tt.pv, tt.reclaim)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+
+			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantPVs, finalPVs.Items)
 		})
 	}
 }

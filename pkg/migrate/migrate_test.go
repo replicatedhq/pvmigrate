@@ -393,7 +393,9 @@ func TestGetPVCs(t *testing.T) {
 						Name:      "pvc1",
 						Namespace: "ns1",
 					},
-					Spec: corev1.PersistentVolumeClaimSpec{},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv1",
+					},
 				},
 			},
 			validate: func(clientset k8sclient.Interface, t *testing.T) error {
@@ -404,6 +406,10 @@ func TestGetPVCs(t *testing.T) {
 				if *pvc.Spec.StorageClassName != dscString {
 					return fmt.Errorf("storage class name was %q not dsc", *pvc.Spec.StorageClassName)
 				}
+
+				if pvc.Spec.Resources.Requests.Storage().String() != "1Gi" {
+					return fmt.Errorf("PVC size was %q not 1Gi", pvc.Spec.Resources.Requests.Storage().String())
+				}
 				return nil
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
@@ -413,7 +419,9 @@ func TestGetPVCs(t *testing.T) {
 							Name:      "pvc1",
 							Namespace: "ns1",
 						},
-						Spec: corev1.PersistentVolumeClaimSpec{},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
+						},
 					},
 				},
 			},
@@ -471,7 +479,9 @@ func TestGetPVCs(t *testing.T) {
 						Name:      "pvc1",
 						Namespace: "ns1",
 					},
-					Spec: corev1.PersistentVolumeClaimSpec{},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv1",
+					},
 				},
 				&corev1.PersistentVolume{
 					ObjectMeta: metav1.ObjectMeta{
@@ -500,6 +510,12 @@ func TestGetPVCs(t *testing.T) {
 						},
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv2",
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
 						StorageClassName: &dscString,
 						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 					},
@@ -522,11 +538,86 @@ func TestGetPVCs(t *testing.T) {
 							Name:      "pvc1",
 							Namespace: "ns1",
 						},
-						Spec: corev1.PersistentVolumeClaimSpec{},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
+						},
 					},
 				},
 			},
 			namespaces: []string{"ns1"},
+		},
+
+		{
+			name:         "one PV, one PVC - migration in progress, wrong storage",
+			sourceScName: "sc1",
+			destScName:   "dsc",
+			wantErr:      true,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv1",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv2",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "dsc",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("2Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1-pvcmigrate",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1-pvcmigrate",
+						Namespace: "ns1",
+						Labels: map[string]string{
+							"test": "retained",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv2",
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("2Gi"),
+							},
+						},
+						StorageClassName: &dscString,
+						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			},
 		},
 
 		{

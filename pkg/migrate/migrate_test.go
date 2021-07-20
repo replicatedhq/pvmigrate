@@ -1149,3 +1149,429 @@ func Test_resetReclaimPolicy(t *testing.T) {
 		})
 	}
 }
+
+func Test_scaleDownPods(t *testing.T) {
+	intVar := int32(2)
+	intVarZero := int32(0)
+	tests := []struct {
+		name            string
+		matchingPVCs    map[string][]corev1.PersistentVolumeClaim
+		waitForCleanup  bool
+		resources       []runtime.Object
+		wantPods        map[string][]corev1.Pod
+		wantDeployments map[string][]appsv1.Deployment
+		wantSS          map[string][]appsv1.StatefulSet
+		wantErr         bool
+		nsList          []string
+	}{
+		{
+			name:            "minimal test case",
+			matchingPVCs:    map[string][]corev1.PersistentVolumeClaim{},
+			waitForCleanup:  true,
+			resources:       []runtime.Object{},
+			wantPods:        map[string][]corev1.Pod{},
+			wantDeployments: map[string][]appsv1.Deployment{},
+			wantSS:          map[string][]appsv1.StatefulSet{},
+			wantErr:         false,
+			nsList:          []string{},
+		},
+		{
+			name: "existing migration pod",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			waitForCleanup: true,
+			resources: []runtime.Object{
+				&corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "migrationpod",
+						Namespace: "ns1",
+						Labels: map[string]string{
+							baseAnnotation: "test",
+						},
+					},
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{
+								Name: "matchingVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "sourcepvc",
+										ReadOnly:  false,
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+			},
+			wantPods: map[string][]corev1.Pod{
+				"ns1": nil,
+			},
+			wantDeployments: map[string][]appsv1.Deployment{
+				"ns1": nil,
+			},
+			wantSS: map[string][]appsv1.StatefulSet{
+				"ns1": nil,
+			},
+			wantErr: false,
+			nsList:  []string{"ns1"},
+		},
+		{
+			name: "other pvc pod",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			waitForCleanup: true,
+			resources: []runtime.Object{
+				&corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "otherpod",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{
+								Name: "otherVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "otherpvc",
+										ReadOnly:  false,
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "otherpvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+			},
+			wantPods: map[string][]corev1.Pod{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "Pod",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "otherpod",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PodSpec{
+							Volumes: []corev1.Volume{
+								{
+									Name: "otherVolume",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: "otherpvc",
+											ReadOnly:  false,
+										},
+									},
+								},
+							},
+						},
+						Status: corev1.PodStatus{},
+					},
+				},
+			},
+			wantDeployments: map[string][]appsv1.Deployment{
+				"ns1": nil,
+			},
+			wantSS: map[string][]appsv1.StatefulSet{
+				"ns1": nil,
+			},
+			wantErr: false,
+			nsList:  []string{"ns1"},
+		},
+		{
+			name: "existing unowned non-migration pod",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			resources: []runtime.Object{
+				&corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "otherpod",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{
+								Name: "matchingVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "sourcepvc",
+										ReadOnly:  false,
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "existing statefulset pod",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			waitForCleanup: false, // scaling down the statefulset won't delete the pod with the test clientset
+			resources: []runtime.Object{
+				&appsv1.StatefulSet{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "StatefulSet",
+						APIVersion: "core/v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-ss",
+						Namespace: "ns1",
+					},
+					Spec: appsv1.StatefulSetSpec{
+						Replicas: &intVar,
+					},
+				},
+				&corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sspod",
+						Namespace: "ns1",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion: "apps/v1",
+								Kind:       "StatefulSet",
+								Name:       "app-ss",
+							},
+						},
+					},
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{
+								Name: "matchingVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "sourcepvc",
+										ReadOnly:  false,
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+			},
+			wantPods: map[string][]corev1.Pod{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "Pod",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sspod",
+							Namespace: "ns1",
+							OwnerReferences: []metav1.OwnerReference{
+								{
+									APIVersion: "apps/v1",
+									Kind:       "StatefulSet",
+									Name:       "app-ss",
+								},
+							},
+						},
+						Spec: corev1.PodSpec{
+							Volumes: []corev1.Volume{
+								{
+									Name: "matchingVolume",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: "sourcepvc",
+											ReadOnly:  false,
+										},
+									},
+								},
+							},
+						},
+						Status: corev1.PodStatus{},
+					},
+				},
+			},
+			wantDeployments: map[string][]appsv1.Deployment{
+				"ns1": nil,
+			},
+			wantSS: map[string][]appsv1.StatefulSet{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "StatefulSet",
+							APIVersion: "core/v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "app-ss",
+							Namespace: "ns1",
+							Annotations: map[string]string{
+								scaleAnnotation: "2",
+							},
+						},
+						Spec: appsv1.StatefulSetSpec{
+							Replicas: &intVarZero,
+						},
+					},
+				},
+			},
+			wantErr: false,
+			nsList:  []string{"ns1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := scaleDownPods(context.Background(), testlog, clientset, tt.matchingPVCs, tt.waitForCleanup)
+			if tt.wantErr {
+				assert.Error(t, err)
+				testlog.Printf("got expected error %q", err.Error())
+				return
+			}
+			assert.NoError(t, err)
+
+			actualPods := map[string][]corev1.Pod{}
+			actualDeployments := map[string][]appsv1.Deployment{}
+			actualSS := map[string][]appsv1.StatefulSet{}
+			for _, ns := range tt.nsList {
+				finalNsPods, err := clientset.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{})
+				assert.NoError(t, err)
+				actualPods[ns] = finalNsPods.Items
+
+				finalNsDeps, err := clientset.AppsV1().Deployments(ns).List(context.Background(), metav1.ListOptions{})
+				assert.NoError(t, err)
+				actualDeployments[ns] = finalNsDeps.Items
+
+				finalNsSS, err := clientset.AppsV1().StatefulSets(ns).List(context.Background(), metav1.ListOptions{})
+				assert.NoError(t, err)
+				actualSS[ns] = finalNsSS.Items
+			}
+			assert.Equal(t, tt.wantPods, actualPods)
+			assert.Equal(t, tt.wantDeployments, actualDeployments)
+			assert.Equal(t, tt.wantSS, actualSS)
+		})
+	}
+}

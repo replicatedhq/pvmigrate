@@ -79,7 +79,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	err = scaleDownPods(ctx, w, clientset, matchingPVCs)
+	err = scaleDownPods(ctx, w, clientset, matchingPVCs, true)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
@@ -484,8 +484,11 @@ func mutatePV(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	}
 }
 
-// TODO: add waitForCleanup param to allow testing this
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim) error {
+// scaleDownPods scales down statefulsets & deployments controlling pods mounting PVCs in a supplied list
+// it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
+// if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
+// if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, waitForCleanup bool) error {
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
@@ -539,8 +542,18 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				matchingOwners[ns][ownerReference.Kind][ownerReference.Name] = struct{}{}
 			}
 			if len(nsPod.OwnerReferences) == 0 {
-				// TODO: handle properly
-				return fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
+				// if this was a migrate job that wasn't cleaned up properly, delete it
+				// (if it's still running, rsync will happily resume when we get back to it)
+				if _, ok := nsPod.Labels[baseAnnotation]; ok {
+					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
+					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
+					if err != nil {
+						return fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
+					}
+				} else {
+					// TODO: handle properly
+					return fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
+				}
 			}
 		}
 	}
@@ -578,7 +591,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
-				case "Deployment":
+				case "Deployment": // TODO: deployments create replicasets, which create pods
 					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
@@ -609,6 +622,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				}
 			}
 		}
+	}
+
+	if !waitForCleanup {
+		w.Printf("\nNot waiting for pods with mounted PVCs to be cleaned up\n")
+		return nil
 	}
 
 	// wait for all pods to be deleted

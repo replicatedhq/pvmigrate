@@ -591,8 +591,20 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
-				case "Deployment": // TODO: deployments create replicasets, which create pods
-					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, ownerName, metav1.GetOptions{})
+				case "ReplicaSet":
+					rs, err := clientset.AppsV1().ReplicaSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
+					if err != nil {
+						return fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
+					}
+
+					if len(rs.OwnerReferences) != 1 {
+						return fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
+					}
+					if rs.OwnerReferences[0].Kind != "Deployment" {
+						return fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
+					}
+
+					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, rs.OwnerReferences[0].Name, metav1.GetOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
 					}

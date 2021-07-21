@@ -1426,7 +1426,7 @@ func Test_scaleDownPods(t *testing.T) {
 				&appsv1.StatefulSet{
 					TypeMeta: metav1.TypeMeta{
 						Kind:       "StatefulSet",
-						APIVersion: "core/v1",
+						APIVersion: "apps/v1",
 					},
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "app-ss",
@@ -1522,7 +1522,7 @@ func Test_scaleDownPods(t *testing.T) {
 					{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "StatefulSet",
-							APIVersion: "core/v1",
+							APIVersion: "apps/v1",
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Name:      "app-ss",
@@ -1536,6 +1536,159 @@ func Test_scaleDownPods(t *testing.T) {
 						},
 					},
 				},
+			},
+			wantErr: false,
+			nsList:  []string{"ns1"},
+		},
+		{
+			name: "existing deployment pod",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			waitForCleanup: false, // scaling down the deployment won't delete the pod with the test clientset
+			resources: []runtime.Object{
+				&appsv1.Deployment{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Deployment",
+						APIVersion: "apps/v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-dep",
+						Namespace: "ns1",
+					},
+					Spec: appsv1.DeploymentSpec{
+						Replicas: &intVar,
+					},
+				},
+				&appsv1.ReplicaSet{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "ReplicaSet",
+						APIVersion: "apps/v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-rs",
+						Namespace: "ns1",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion: "apps/v1",
+								Kind:       "Deployment",
+								Name:       "app-dep",
+							},
+						},
+					},
+				},
+				&corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sspod",
+						Namespace: "ns1",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion: "apps/v1",
+								Kind:       "ReplicaSet",
+								Name:       "app-rs",
+							},
+						},
+					},
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{
+								Name: "matchingVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "sourcepvc",
+										ReadOnly:  false,
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{},
+				},
+			},
+			wantPods: map[string][]corev1.Pod{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "Pod",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sspod",
+							Namespace: "ns1",
+							OwnerReferences: []metav1.OwnerReference{
+								{
+									APIVersion: "apps/v1",
+									Kind:       "ReplicaSet",
+									Name:       "app-rs",
+								},
+							},
+						},
+						Spec: corev1.PodSpec{
+							Volumes: []corev1.Volume{
+								{
+									Name: "matchingVolume",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: "sourcepvc",
+											ReadOnly:  false,
+										},
+									},
+								},
+							},
+						},
+						Status: corev1.PodStatus{},
+					},
+				},
+			},
+			wantDeployments: map[string][]appsv1.Deployment{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "Deployment",
+							APIVersion: "apps/v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "app-dep",
+							Namespace: "ns1",
+							Annotations: map[string]string{
+								scaleAnnotation: "2",
+							},
+						},
+						Spec: appsv1.DeploymentSpec{
+							Replicas: &intVarZero,
+						},
+					},
+				},
+			},
+			wantSS: map[string][]appsv1.StatefulSet{
+				"ns1": nil,
 			},
 			wantErr: false,
 			nsList:  []string{"ns1"},

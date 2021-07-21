@@ -327,10 +327,11 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", len(matchingPVs), len(matchingPVCs))
 	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
-	_, _ = fmt.Fprintf(tw, "namespace:\tpvc:\tpv:\t\n")
+	_, _ = fmt.Fprintf(tw, "namespace:\tpvc:\tpv:\tsize:\t\n")
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t\n", ns, nsPvc.Name, nsPvc.Spec.VolumeName)
+			pvCap := pvsByName[nsPvc.Spec.VolumeName].Spec.Capacity
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t\n", ns, nsPvc.Name, nsPvc.Spec.VolumeName, pvCap.Storage().String())
 		}
 	}
 	err = tw.Flush()

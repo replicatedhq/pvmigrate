@@ -79,7 +79,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	err = scaleDownPods(ctx, w, clientset, matchingPVCs, true)
+	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
@@ -488,7 +488,7 @@ func mutatePV(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, waitForCleanup bool) error {
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
@@ -636,17 +636,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 		}
 	}
 
-	if !waitForCleanup {
-		w.Printf("\nNot waiting for pods with mounted PVCs to be cleaned up\n")
-		return nil
-	}
-
 	// wait for all pods to be deleted
 	w.Printf("\nWaiting for pods with mounted PVCs to be cleaned up\n")
+	time.Sleep(checkInterval / 16)
 checkPvcPodLoop:
 	for true {
-		time.Sleep(time.Second * 5) // don't check too often, as this loop is relatively expensive
-
 		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {
@@ -661,8 +655,9 @@ checkPvcPodLoop:
 									return fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
 								}
 
-								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, sleeping again\n", nsPod.Name, ns, nsClaim.Name)
-								continue checkPvcPodLoop // as soon as we find a matching pod, we know we need to wait another 30s
+								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, waiting\n", nsPod.Name, ns, nsClaim.Name)
+								time.Sleep(checkInterval) // don't check too often, as this loop is relatively expensive
+								continue checkPvcPodLoop  // as soon as we find a matching pod, we know we need to wait another 30s
 							}
 						}
 					}

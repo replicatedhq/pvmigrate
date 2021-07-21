@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
@@ -1156,18 +1157,17 @@ func Test_scaleDownPods(t *testing.T) {
 	tests := []struct {
 		name            string
 		matchingPVCs    map[string][]corev1.PersistentVolumeClaim
-		waitForCleanup  bool
 		resources       []runtime.Object
 		wantPods        map[string][]corev1.Pod
 		wantDeployments map[string][]appsv1.Deployment
 		wantSS          map[string][]appsv1.StatefulSet
 		wantErr         bool
 		nsList          []string
+		backgroundFunc  func(context.Context, *log.Logger, k8sclient.Interface)
 	}{
 		{
 			name:            "minimal test case",
 			matchingPVCs:    map[string][]corev1.PersistentVolumeClaim{},
-			waitForCleanup:  true,
 			resources:       []runtime.Object{},
 			wantPods:        map[string][]corev1.Pod{},
 			wantDeployments: map[string][]appsv1.Deployment{},
@@ -1192,7 +1192,6 @@ func Test_scaleDownPods(t *testing.T) {
 					},
 				},
 			},
-			waitForCleanup: true,
 			resources: []runtime.Object{
 				&corev1.Pod{
 					TypeMeta: metav1.TypeMeta{
@@ -1262,7 +1261,6 @@ func Test_scaleDownPods(t *testing.T) {
 					},
 				},
 			},
-			waitForCleanup: true,
 			resources: []runtime.Object{
 				&corev1.Pod{
 					TypeMeta: metav1.TypeMeta{
@@ -1421,7 +1419,6 @@ func Test_scaleDownPods(t *testing.T) {
 					},
 				},
 			},
-			waitForCleanup: false, // scaling down the statefulset won't delete the pod with the test clientset
 			resources: []runtime.Object{
 				&appsv1.StatefulSet{
 					TypeMeta: metav1.TypeMeta{
@@ -1480,39 +1477,7 @@ func Test_scaleDownPods(t *testing.T) {
 				},
 			},
 			wantPods: map[string][]corev1.Pod{
-				"ns1": {
-					{
-						TypeMeta: metav1.TypeMeta{
-							Kind:       "Pod",
-							APIVersion: "v1",
-						},
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "sspod",
-							Namespace: "ns1",
-							OwnerReferences: []metav1.OwnerReference{
-								{
-									APIVersion: "apps/v1",
-									Kind:       "StatefulSet",
-									Name:       "app-ss",
-								},
-							},
-						},
-						Spec: corev1.PodSpec{
-							Volumes: []corev1.Volume{
-								{
-									Name: "matchingVolume",
-									VolumeSource: corev1.VolumeSource{
-										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-											ClaimName: "sourcepvc",
-											ReadOnly:  false,
-										},
-									},
-								},
-							},
-						},
-						Status: corev1.PodStatus{},
-					},
-				},
+				"ns1": nil,
 			},
 			wantDeployments: map[string][]appsv1.Deployment{
 				"ns1": nil,
@@ -1539,6 +1504,30 @@ func Test_scaleDownPods(t *testing.T) {
 			},
 			wantErr: false,
 			nsList:  []string{"ns1"},
+			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
+				// watch for the statefulset to be scaled down, and then delete the pod
+				for true {
+					select {
+					case <-time.After(time.Second / 100):
+						// check statefulset, maybe delete pod
+						ss, err := k.AppsV1().StatefulSets("ns1").Get(ctx, "app-ss", metav1.GetOptions{})
+						if err != nil {
+							logger.Printf("got error checking statefulset app-ss: %s", err.Error())
+							return
+						}
+						if ss.Spec.Replicas != nil && *ss.Spec.Replicas == 0 {
+							err = k.CoreV1().Pods("ns1").Delete(ctx, "sspod", metav1.DeleteOptions{})
+							if err != nil {
+								logger.Printf("got error deleting pod sspod: %s", err.Error())
+							}
+							return
+						}
+					case <-ctx.Done():
+						logger.Print("never saw statefulset scale down")
+						return
+					}
+				}
+			},
 		},
 		{
 			name: "existing deployment pod",
@@ -1557,7 +1546,6 @@ func Test_scaleDownPods(t *testing.T) {
 					},
 				},
 			},
-			waitForCleanup: false, // scaling down the deployment won't delete the pod with the test clientset
 			resources: []runtime.Object{
 				&appsv1.Deployment{
 					TypeMeta: metav1.TypeMeta{
@@ -1595,7 +1583,7 @@ func Test_scaleDownPods(t *testing.T) {
 						APIVersion: "v1",
 					},
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "sspod",
+						Name:      "deppod",
 						Namespace: "ns1",
 						OwnerReferences: []metav1.OwnerReference{
 							{
@@ -1633,39 +1621,7 @@ func Test_scaleDownPods(t *testing.T) {
 				},
 			},
 			wantPods: map[string][]corev1.Pod{
-				"ns1": {
-					{
-						TypeMeta: metav1.TypeMeta{
-							Kind:       "Pod",
-							APIVersion: "v1",
-						},
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "sspod",
-							Namespace: "ns1",
-							OwnerReferences: []metav1.OwnerReference{
-								{
-									APIVersion: "apps/v1",
-									Kind:       "ReplicaSet",
-									Name:       "app-rs",
-								},
-							},
-						},
-						Spec: corev1.PodSpec{
-							Volumes: []corev1.Volume{
-								{
-									Name: "matchingVolume",
-									VolumeSource: corev1.VolumeSource{
-										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-											ClaimName: "sourcepvc",
-											ReadOnly:  false,
-										},
-									},
-								},
-							},
-						},
-						Status: corev1.PodStatus{},
-					},
-				},
+				"ns1": nil,
 			},
 			wantDeployments: map[string][]appsv1.Deployment{
 				"ns1": {
@@ -1692,13 +1648,42 @@ func Test_scaleDownPods(t *testing.T) {
 			},
 			wantErr: false,
 			nsList:  []string{"ns1"},
+			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
+				// watch for the deployment to be scaled down, and then delete the pod
+				for true {
+					select {
+					case <-time.After(time.Second / 100):
+						// check deployment, maybe delete pod
+						ss, err := k.AppsV1().Deployments("ns1").Get(ctx, "app-dep", metav1.GetOptions{})
+						if err != nil {
+							logger.Printf("got error checking deployment app-dep: %s", err.Error())
+							return
+						}
+						if ss.Spec.Replicas != nil && *ss.Spec.Replicas == 0 {
+							err = k.CoreV1().Pods("ns1").Delete(ctx, "deppod", metav1.DeleteOptions{})
+							if err != nil {
+								logger.Printf("got error deleting pod deppod: %s", err.Error())
+							}
+							return
+						}
+					case <-ctx.Done():
+						logger.Print("never saw deployment scale down")
+						return
+					}
+				}
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
+			defer cancelfunc()
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := scaleDownPods(context.Background(), testlog, clientset, tt.matchingPVCs, tt.waitForCleanup)
+			if tt.backgroundFunc != nil {
+				go tt.backgroundFunc(testCtx, testlog, clientset)
+			}
+			err := scaleDownPods(testCtx, testlog, clientset, tt.matchingPVCs, time.Second/20)
 			if tt.wantErr {
 				assert.Error(t, err)
 				testlog.Printf("got expected error %q", err.Error())
@@ -1710,15 +1695,15 @@ func Test_scaleDownPods(t *testing.T) {
 			actualDeployments := map[string][]appsv1.Deployment{}
 			actualSS := map[string][]appsv1.StatefulSet{}
 			for _, ns := range tt.nsList {
-				finalNsPods, err := clientset.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{})
+				finalNsPods, err := clientset.CoreV1().Pods(ns).List(testCtx, metav1.ListOptions{})
 				assert.NoError(t, err)
 				actualPods[ns] = finalNsPods.Items
 
-				finalNsDeps, err := clientset.AppsV1().Deployments(ns).List(context.Background(), metav1.ListOptions{})
+				finalNsDeps, err := clientset.AppsV1().Deployments(ns).List(testCtx, metav1.ListOptions{})
 				assert.NoError(t, err)
 				actualDeployments[ns] = finalNsDeps.Items
 
-				finalNsSS, err := clientset.AppsV1().StatefulSets(ns).List(context.Background(), metav1.ListOptions{})
+				finalNsSS, err := clientset.AppsV1().StatefulSets(ns).List(testCtx, metav1.ListOptions{})
 				assert.NoError(t, err)
 				actualSS[ns] = finalNsSS.Items
 			}

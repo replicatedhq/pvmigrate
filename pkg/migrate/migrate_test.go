@@ -1713,3 +1713,218 @@ func Test_scaleDownPods(t *testing.T) {
 		})
 	}
 }
+
+func Test_swapDefaults(t *testing.T) {
+	tests := []struct {
+		name         string
+		resources    []runtime.Object
+		wantSCs      []storagev1.StorageClass
+		oldDefaultSC string
+		newDefaultSC string
+		wantErr      bool
+	}{
+		{
+			name: "proper setup",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        "aSC",
+						Annotations: map[string]string{},
+					},
+					Provisioner: "abc",
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
+		},
+
+		{
+			name: "other existing annotations setup",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+							"otherannotation":               "blah",
+						},
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							"secondannotation": "xyz",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							"otherannotation": "blah",
+						},
+					},
+					Provisioner: "abc",
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+							"secondannotation":              "xyz",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
+		},
+
+		{
+			name: "new default SC does not exist",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "abc",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantErr:      true,
+		},
+		{
+			name: "old default SC does not exist",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantErr:      true,
+		},
+		{
+			name: "old SC not actually default",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "false",
+						},
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantErr:      true,
+		},
+		{
+			name: "old SC not actually default (nil annotations edition)",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantErr:      true,
+		},
+		{
+			name: "old SC not actually default (other annotations edition)",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							"abc": "xyz",
+						},
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantErr:      true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			err := swapDefaults(context.Background(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
+			if tt.wantErr {
+				assert.Error(t, err)
+				testlog.Printf("Got expected error %s", err.Error())
+				return
+			}
+			assert.NoError(t, err)
+
+			finalSCs, err := clientset.StorageV1().StorageClasses().List(context.Background(), metav1.ListOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantSCs, finalSCs.Items)
+		})
+	}
+}

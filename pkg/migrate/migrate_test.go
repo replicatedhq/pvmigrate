@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -197,13 +197,14 @@ func TestScaleUpPods(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := scaleUpPods(context.Background(), testlog, clientset, test.namespaces)
-			assert.NoError(t, err)
+			req.NoError(err)
 
 			err = test.validate(clientset, t)
-			assert.NoError(t, err)
+			req.NoError(err)
 		})
 	}
 }
@@ -255,13 +256,14 @@ func TestMutatePV(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := mutatePV(context.Background(), testlog, clientset, test.pvname, test.ttmutator, test.ttchecker)
-			assert.NoError(t, err)
+			req.NoError(err)
 
 			err = test.validate(clientset, t)
-			assert.NoError(t, err)
+			req.NoError(err)
 		})
 	}
 }
@@ -321,13 +323,14 @@ func TestValidateStorageClasses(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := validateStorageClasses(context.Background(), testlog, clientset, test.sourceSC, test.destSC)
 			if !test.wantErr {
-				assert.NoError(t, err)
+				req.NoError(err)
 			} else {
-				assert.Error(t, err)
+				req.Error(err)
 			}
 
 		})
@@ -414,7 +417,7 @@ func TestGetPVCs(t *testing.T) {
 				return nil
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
-				"ns1": []corev1.PersistentVolumeClaim{
+				"ns1": {
 					{
 						ObjectMeta: metav1.ObjectMeta{
 							Name:      "pvc1",
@@ -533,7 +536,7 @@ func TestGetPVCs(t *testing.T) {
 				return nil
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
-				"ns1": []corev1.PersistentVolumeClaim{
+				"ns1": {
 					{
 						ObjectMeta: metav1.ObjectMeta{
 							Name:      "pvc1",
@@ -636,21 +639,22 @@ func TestGetPVCs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName)
 			if !test.wantErr {
-				assert.NoError(t, err)
+				req.NoError(err)
 			} else {
-				assert.Error(t, err)
+				req.Error(err)
 				return
 			}
 
 			err = test.validate(clientset, t)
-			assert.NoError(t, err)
+			req.NoError(err)
 
-			assert.Equal(t, test.originalPVCs, originalPVCs)
-			assert.Equal(t, test.namespaces, nses)
+			req.Equal(test.originalPVCs, originalPVCs)
+			req.Equal(test.namespaces, nses)
 		})
 	}
 }
@@ -743,15 +747,16 @@ func Test_createMigrationPod(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset()
 			got, err := createMigrationPod(context.Background(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage)
 			if tt.wantErr {
-				assert.Error(t, err)
+				req.Error(err)
 				return
 			}
 
-			assert.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			req.NoError(err)
+			req.Equal(tt.want, got)
 		})
 	}
 }
@@ -982,22 +987,23 @@ func Test_swapPVs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := swapPVs(context.Background(), testlog, clientset, tt.ns, tt.pvcName)
 			if tt.wantErr {
-				assert.Error(t, err)
+				req.Error(err)
 				return
 			}
-			assert.NoError(t, err)
+			req.NoError(err)
 
 			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantPVs, finalPVs.Items)
+			req.NoError(err)
+			req.Equal(tt.wantPVs, finalPVs.Items)
 
 			finalPVCs, err := clientset.CoreV1().PersistentVolumeClaims(tt.ns).List(context.Background(), metav1.ListOptions{})
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantPVCs, finalPVCs.Items)
+			req.NoError(err)
+			req.Equal(tt.wantPVCs, finalPVCs.Items)
 		})
 	}
 }
@@ -1135,18 +1141,19 @@ func Test_resetReclaimPolicy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := resetReclaimPolicy(context.Background(), testlog, clientset, tt.pv, tt.reclaim)
 			if tt.wantErr {
-				assert.Error(t, err)
+				req.Error(err)
 				return
 			}
-			assert.NoError(t, err)
+			req.NoError(err)
 
 			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantPVs, finalPVs.Items)
+			req.NoError(err)
+			req.Equal(tt.wantPVs, finalPVs.Items)
 		})
 	}
 }
@@ -1676,6 +1683,7 @@ func Test_scaleDownPods(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
 			clientset := fake.NewSimpleClientset(tt.resources...)
@@ -1685,31 +1693,31 @@ func Test_scaleDownPods(t *testing.T) {
 			}
 			err := scaleDownPods(testCtx, testlog, clientset, tt.matchingPVCs, time.Second/20)
 			if tt.wantErr {
-				assert.Error(t, err)
+				req.Error(err)
 				testlog.Printf("got expected error %q", err.Error())
 				return
 			}
-			assert.NoError(t, err)
+			req.NoError(err)
 
 			actualPods := map[string][]corev1.Pod{}
 			actualDeployments := map[string][]appsv1.Deployment{}
 			actualSS := map[string][]appsv1.StatefulSet{}
 			for _, ns := range tt.nsList {
 				finalNsPods, err := clientset.CoreV1().Pods(ns).List(testCtx, metav1.ListOptions{})
-				assert.NoError(t, err)
+				req.NoError(err)
 				actualPods[ns] = finalNsPods.Items
 
 				finalNsDeps, err := clientset.AppsV1().Deployments(ns).List(testCtx, metav1.ListOptions{})
-				assert.NoError(t, err)
+				req.NoError(err)
 				actualDeployments[ns] = finalNsDeps.Items
 
 				finalNsSS, err := clientset.AppsV1().StatefulSets(ns).List(testCtx, metav1.ListOptions{})
-				assert.NoError(t, err)
+				req.NoError(err)
 				actualSS[ns] = finalNsSS.Items
 			}
-			assert.Equal(t, tt.wantPods, actualPods)
-			assert.Equal(t, tt.wantDeployments, actualDeployments)
-			assert.Equal(t, tt.wantSS, actualSS)
+			req.Equal(tt.wantPods, actualPods)
+			req.Equal(tt.wantDeployments, actualDeployments)
+			req.Equal(tt.wantSS, actualSS)
 		})
 	}
 }

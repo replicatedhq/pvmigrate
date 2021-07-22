@@ -1849,7 +1849,17 @@ func Test_swapDefaults(t *testing.T) {
 			},
 			oldDefaultSC: "aSC",
 			newDefaultSC: "bSC",
-			wantErr:      true,
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
 		},
 		{
 			name: "old SC not actually default",
@@ -1872,7 +1882,26 @@ func Test_swapDefaults(t *testing.T) {
 			},
 			oldDefaultSC: "aSC",
 			newDefaultSC: "bSC",
-			wantErr:      true,
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "false",
+						},
+					},
+					Provisioner: "abc",
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
 		},
 		{
 			name: "old SC not actually default (nil annotations edition)",
@@ -1892,7 +1921,23 @@ func Test_swapDefaults(t *testing.T) {
 			},
 			oldDefaultSC: "aSC",
 			newDefaultSC: "bSC",
-			wantErr:      true,
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+					},
+					Provisioner: "abc",
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
 		},
 		{
 			name: "old SC not actually default (other annotations edition)",
@@ -1915,7 +1960,114 @@ func Test_swapDefaults(t *testing.T) {
 			},
 			oldDefaultSC: "aSC",
 			newDefaultSC: "bSC",
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							"abc": "xyz",
+						},
+					},
+					Provisioner: "abc",
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
+		},
+		{
+			name: "another SC was actually the default",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "cSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "def",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
 			wantErr:      true,
+		},
+		{
+			name: "another SC was actually the default (other annotation edition)",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "aSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "false",
+						},
+					},
+					Provisioner: "abc",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+					},
+					Provisioner: "xyz",
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "cSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "def",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantErr:      true,
+		},
+		{
+			name: "the desired SC was already the default",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
+			oldDefaultSC: "aSC",
+			newDefaultSC: "bSC",
+			wantSCs: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "bSC",
+						Annotations: map[string]string{
+							IsDefaultStorageClassAnnotation: "true",
+						},
+					},
+					Provisioner: "xyz",
+				},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -1923,7 +2075,7 @@ func Test_swapDefaults(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := swapDefaults(context.Background(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
+			err := swapDefaultStorageClasses(context.Background(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("Got expected error %s", err.Error())

@@ -3,6 +3,7 @@ package migrate
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -109,7 +109,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	}
 
 	if setDefaults {
-		err = swapDefaults(ctx, w, clientset, sourceSCName, destSCName)
+		err = swapDefaultStorageClasses(ctx, w, clientset, sourceSCName, destSCName)
 		if err != nil {
 			return fmt.Errorf("failed to change default StorageClass from %s to %s: %w", sourceSCName, destSCName, err)
 		}
@@ -119,28 +119,55 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	return nil
 }
 
-func swapDefaults(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, oldDefaultSC string, newDefaultSC string) error {
-	// create a pod for each PVC migration, and wait for it to finish
-	w.Printf("\nChanging default StorageClass from %s to %s\n", oldDefaultSC, newDefaultSC)
-	err := mutateSC(ctx, w, clientset, oldDefaultSC, func(sc *storagev1.StorageClass) (*storagev1.StorageClass, error) {
-		// check to make sure that this is actually the default StorageClass before deleting the annotation
+// swapDefaultStorageClasses attempts to set newDefaultSC as the default StorageClass
+// if oldDefaultSC was set as the default, then it will be unset first
+// if another StorageClass besides these two is currently the default, it will return an error
+func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, oldDefaultSC string, newDefaultSC string) error {
+	// check if any SC is currently set as default - if none is, skip the "remove existing default" step
+	scs, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list storageclasses: %w", err)
+	}
+
+	isDefaultSet := false
+	for _, sc := range scs.Items {
 		if sc.Annotations == nil {
-			return nil, fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
+			continue
 		}
 		val, ok := sc.Annotations[IsDefaultStorageClassAnnotation]
 		if !ok || val != "true" {
-			return nil, fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
+			continue
 		}
+		if sc.Name == newDefaultSC {
+			return nil // the currently default StorageClass is the one we want to be set as default, nothing left to do
+		}
+		isDefaultSet = true
+	}
 
-		// delete the annotation now that we know it exists
-		delete(sc.Annotations, IsDefaultStorageClassAnnotation)
-		return sc, nil
-	}, func(sc *storagev1.StorageClass) bool {
-		_, ok := sc.Annotations[IsDefaultStorageClassAnnotation]
-		return !ok
-	})
-	if err != nil {
-		return fmt.Errorf("failed to unset StorageClass %s as default: %w", oldDefaultSC, err)
+	if isDefaultSet { // only unset the current default StorageClass if there is currently a default StorageClass
+		w.Printf("\nChanging default StorageClass from %s to %s\n", oldDefaultSC, newDefaultSC)
+		err = mutateSC(ctx, w, clientset, oldDefaultSC, func(sc *storagev1.StorageClass) (*storagev1.StorageClass, error) {
+			// check to make sure that this is actually the default StorageClass before deleting the annotation
+			if sc.Annotations == nil {
+				return nil, fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
+			}
+			val, ok := sc.Annotations[IsDefaultStorageClassAnnotation]
+			if !ok || val != "true" {
+				return nil, fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
+			}
+
+			// delete the annotation now that we know it exists
+			delete(sc.Annotations, IsDefaultStorageClassAnnotation)
+			return sc, nil
+		}, func(sc *storagev1.StorageClass) bool {
+			_, ok := sc.Annotations[IsDefaultStorageClassAnnotation]
+			return !ok
+		})
+		if err != nil {
+			return fmt.Errorf("failed to unset StorageClass %s as default: %w", oldDefaultSC, err)
+		}
+	} else {
+		w.Printf("\nSetting %s as the default StorageClass\n", newDefaultSC)
 	}
 
 	err = mutateSC(ctx, w, clientset, newDefaultSC, func(sc *storagev1.StorageClass) (*storagev1.StorageClass, error) {

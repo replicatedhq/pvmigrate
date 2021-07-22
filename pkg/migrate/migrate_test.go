@@ -1920,19 +1920,20 @@ func Test_swapDefaults(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := swapDefaults(context.Background(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
 			if tt.wantErr {
-				assert.Error(t, err)
+				req.Error(err)
 				testlog.Printf("Got expected error %s", err.Error())
 				return
 			}
-			assert.NoError(t, err)
+			req.NoError(err)
 
 			finalSCs, err := clientset.StorageV1().StorageClasses().List(context.Background(), metav1.ListOptions{})
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantSCs, finalSCs.Items)
+			req.NoError(err)
+			req.Equal(tt.wantSCs, finalSCs.Items)
 		})
 	}
 }

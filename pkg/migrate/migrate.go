@@ -141,24 +141,17 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 		if sc.Name == newDefaultSC {
 			return nil // the currently default StorageClass is the one we want to be set as default, nothing left to do
 		}
+		if sc.Name != oldDefaultSC {
+			return fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
+		}
 		isDefaultSet = true
 	}
 
 	if isDefaultSet { // only unset the current default StorageClass if there is currently a default StorageClass
 		w.Printf("\nChanging default StorageClass from %s to %s\n", oldDefaultSC, newDefaultSC)
-		err = mutateSC(ctx, w, clientset, oldDefaultSC, func(sc *storagev1.StorageClass) (*storagev1.StorageClass, error) {
-			// check to make sure that this is actually the default StorageClass before deleting the annotation
-			if sc.Annotations == nil {
-				return nil, fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
-			}
-			val, ok := sc.Annotations[IsDefaultStorageClassAnnotation]
-			if !ok || val != "true" {
-				return nil, fmt.Errorf("%s is not the default StorageClass", oldDefaultSC)
-			}
-
-			// delete the annotation now that we know it exists
+		err = mutateSC(ctx, w, clientset, oldDefaultSC, func(sc *storagev1.StorageClass) *storagev1.StorageClass {
 			delete(sc.Annotations, IsDefaultStorageClassAnnotation)
-			return sc, nil
+			return sc
 		}, func(sc *storagev1.StorageClass) bool {
 			_, ok := sc.Annotations[IsDefaultStorageClassAnnotation]
 			return !ok
@@ -170,13 +163,13 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 		w.Printf("\nSetting %s as the default StorageClass\n", newDefaultSC)
 	}
 
-	err = mutateSC(ctx, w, clientset, newDefaultSC, func(sc *storagev1.StorageClass) (*storagev1.StorageClass, error) {
+	err = mutateSC(ctx, w, clientset, newDefaultSC, func(sc *storagev1.StorageClass) *storagev1.StorageClass {
 		if sc.Annotations == nil {
 			sc.Annotations = map[string]string{IsDefaultStorageClassAnnotation: "true"}
 		} else {
 			sc.Annotations[IsDefaultStorageClassAnnotation] = "true"
 		}
-		return sc, nil
+		return sc
 	}, func(sc *storagev1.StorageClass) bool {
 		if sc.Annotations == nil {
 			return false
@@ -566,7 +559,7 @@ func mutatePV(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 }
 
 // get a SC, apply the selected mutator to the SC, update the SC, use the supplied validator to wait for the update to show up
-func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, scName string, mutator func(sc *storagev1.StorageClass) (*storagev1.StorageClass, error), checker func(sc *storagev1.StorageClass) bool) error {
+func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, scName string, mutator func(sc *storagev1.StorageClass) *storagev1.StorageClass, checker func(sc *storagev1.StorageClass) bool) error {
 	tries := 0
 	for {
 		sc, err := clientset.StorageV1().StorageClasses().Get(ctx, scName, metav1.GetOptions{})
@@ -574,10 +567,7 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 			return fmt.Errorf("failed to get storage classes %s: %w", scName, err)
 		}
 
-		sc, err = mutator(sc)
-		if err != nil {
-			return fmt.Errorf("error creating mutated SC: %w", err)
-		}
+		sc = mutator(sc)
 
 		_, err = clientset.StorageV1().StorageClasses().Update(ctx, sc, metav1.UpdateOptions{})
 		if err != nil {

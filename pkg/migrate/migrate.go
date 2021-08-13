@@ -33,6 +33,8 @@ const desiredReclaimAnnotation = baseAnnotation + "-reclaim"
 // but that would require adding the k8s import overrides to our go.mod
 const IsDefaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-class"
 
+const pvMigrateContainerName = "pvmigrate"
+
 // Cli uses CLI options to run Migrate
 func Cli() {
 	var sourceSCName string
@@ -240,7 +242,8 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	}
 
 	podLogsReq := clientset.CoreV1().Pods(ns).GetLogs(createdPod.Name, &corev1.PodLogOptions{
-		Follow: true,
+		Container: pvMigrateContainerName,
+		Follow:    true,
 	})
 	podLogs, err := podLogsReq.Stream(ctx)
 	if err != nil {
@@ -330,7 +333,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 			},
 			Containers: []corev1.Container{
 				{
-					Name:  "pvmigrate-" + sourcePvcName,
+					Name:  pvMigrateContainerName,
 					Image: rsyncImage,
 					Command: []string{
 						"rsync",

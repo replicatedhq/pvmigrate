@@ -715,7 +715,7 @@ func Test_createMigrationPod(t *testing.T) {
 					},
 					Containers: []corev1.Container{
 						{
-							Name:  "pvmigrate-sourcepvc",
+							Name:  "pvmigrate",
 							Image: "imagename",
 							Command: []string{
 								"rsync",

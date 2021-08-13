@@ -9,13 +9,23 @@ To migrate PVs from the 'default' StorageClass to mynewsc:
 pvmigrate --source-sc default --dest-sc mynewsc
 ```
 
+## Flags
+
+| Flag           | Type   | Required | Default          | Description                                                       |
+|----------------|--------|----------|------------------|-------------------------------------------------------------------|
+| --source-sc    | String | ✓        |                  | storage provider name to migrate from                             |
+| --dest-sc      | String | ✓        |                  | storage provider name to migrate to                               |
+| --rsync-image  | String |          | eeacms/rsync:2.3 | the image to use to copy PVCs - must have 'rsync' on the path     |
+| --set-defaults | Bool   |          | false            | change default storage class from source to dest                  |
+| --verbose-copy | Bool   |          | false            | show output from the rsync command used to copy data between PVCs |
+
 ## Process
 
 In order, it:
-1. Validates that both the source and dest StorageClasses exist
-2. Finds PVs using the source StorageClass
+1. Validates that both the `source` and `dest` StorageClasses exist
+2. Finds PVs using the `source` StorageClass
 3. Finds PVCs corresponding to the above PVs
-4. Creates new PVCs for each existing PVC, but using the new StorageClass
+4. Creates new PVCs for each existing PVC, but using the `dest` StorageClass
 5. For each PVC:
     * Finds all pods mounting the existing PVC
     * Finds all StatefulSets and Deployments controlling those pods and adds an annotation with the original scale before setting that scale to 0
@@ -31,6 +41,7 @@ In order, it:
     * Sets the reclaim policy of the replacement PV to be what the original PV was set to
     * Deletes the original PV
 8. Resets the scales of the affected StatefulSets and Deployments
+9. If `--set-defaults` is set, changes the default StorageClass to `dest`
 
 ## Known Limitations
 
@@ -41,3 +52,4 @@ In order, it:
 5. Pods not controlled by anything are not handled, and will cause pvmigrate to exit with an error
 6. PVs without associated PVCs are not handled, and will cause pvmigrate to exit with an error
 7. PVCs that are only available on one node (or some subset of nodes) may not have their migration pod run on the proper node, which would result in the pod never starting and pvmigrate hanging forever
+8. If the default StorageClass is `sc3`, migrating from `sc1` to `sc2` with `--set-defaults` will not change the default and will return an error.

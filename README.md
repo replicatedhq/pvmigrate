@@ -20,17 +20,17 @@ In order, it:
     * Finds all pods mounting the existing PVC
     * Finds all StatefulSets and Deployments controlling those pods and adds an annotation with the original scale before setting that scale to 0
     * Waits for all pods mounting the existing PVC to be removed
-8. For each PVC:
+6. For each PVC:
     * Creates a pod mounting both the original and replacement PVC which then `rsync`s data between the two
     * Waits for that invocation of `rsync` to complete
-9. For each PVC:
+7. For each PVC:
     * Marks all the PVs associated with the original and replacement PVCs as 'retain', so that they will not be deleted when the PVCs are removed, and adds an annotation to the replacement PV with the original's reclaim policy
     * Deletes the original PVC so that the name is available, and removes the association between the PV and the removed PVC
     * Deletes the replacement PVC so that the PV is available, and removes the association between the PV and the removed PVC
     * Creates a new PVC with the original name, but associated with the replacement PV
     * Sets the reclaim policy of the replacement PV to be what the original PV was set to
     * Deletes the original PV
-10. Resets the scales of the affected StatefulSets and Deployments
+8. Resets the scales of the affected StatefulSets and Deployments
 
 ## Known Limitations
 

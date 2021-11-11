@@ -270,11 +270,12 @@ func TestMutatePV(t *testing.T) {
 
 func TestValidateStorageClasses(t *testing.T) {
 	tests := []struct {
-		name      string
-		resources []runtime.Object
-		sourceSC  string
-		destSC    string
-		wantErr   bool
+		name                 string
+		resources            []runtime.Object
+		sourceSC             string
+		destSC               string
+		skipSourceValidation bool
+		wantErr              bool
 	}{
 		{
 			name:     "both StorageClasses exist and are distinct",
@@ -319,6 +320,20 @@ func TestValidateStorageClasses(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:                 "source does not exist, but skipSourceValidation is set",
+			sourceSC:             "sourcesc",
+			destSC:               "destsc",
+			wantErr:              false,
+			skipSourceValidation: true,
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "destsc",
+					},
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -326,7 +341,7 @@ func TestValidateStorageClasses(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := validateStorageClasses(context.Background(), testlog, clientset, test.sourceSC, test.destSC)
+			err := validateStorageClasses(context.Background(), testlog, clientset, test.sourceSC, test.destSC, test.skipSourceValidation)
 			if !test.wantErr {
 				req.NoError(err)
 			} else {

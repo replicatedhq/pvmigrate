@@ -35,19 +35,26 @@ const IsDefaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-c
 
 const pvMigrateContainerName = "pvmigrate"
 
+// Options is the set of options that should be provided to Migrate
+type Options struct {
+	SourceSCName         string
+	DestSCName           string
+	RsyncImage           string
+	SetDefaults          bool
+	VerboseCopy          bool
+	SkipSourceValidation bool
+}
+
 // Cli uses CLI options to run Migrate
 func Cli() {
-	var sourceSCName string
-	var destSCName string
-	var rsyncImage string
-	var setDefaults bool
-	var verboseCopy bool
+	var options Options
 
-	flag.StringVar(&sourceSCName, "source-sc", "", "storage provider name to migrate from")
-	flag.StringVar(&destSCName, "dest-sc", "", "storage provider name to migrate to")
-	flag.StringVar(&rsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
-	flag.BoolVar(&setDefaults, "set-defaults", false, "change default storage class from source to dest")
-	flag.BoolVar(&verboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
+	flag.StringVar(&options.SourceSCName, "source-sc", "", "storage provider name to migrate from")
+	flag.StringVar(&options.DestSCName, "dest-sc", "", "storage provider name to migrate to")
+	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
+	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
+	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
+	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
 
 	flag.Parse()
 
@@ -66,7 +73,7 @@ func Cli() {
 
 	output := log.New(os.Stdout, "", 0) // this has no time prefix etc
 
-	err = Migrate(context.TODO(), output, clientset, sourceSCName, destSCName, rsyncImage, setDefaults, verboseCopy)
+	err = Migrate(context.TODO(), output, clientset, options)
 	if err != nil {
 		fmt.Printf("%s\n", err.Error())
 		os.Exit(1)
@@ -74,13 +81,13 @@ func Cli() {
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
-func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName, rsyncImage string, setDefaults, verboseCopy bool) error {
-	err := validateStorageClasses(ctx, w, clientset, sourceSCName, destSCName)
+func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options Options) error {
+	err := validateStorageClasses(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.SkipSourceValidation)
 	if err != nil {
 		return err
 	}
 
-	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, sourceSCName, destSCName)
+	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName)
 	if err != nil {
 		return err
 	}
@@ -90,7 +97,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, sourceSCName, destSCName, rsyncImage, matchingPVCs, verboseCopy)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy)
 	if err != nil {
 		return err
 	}
@@ -110,10 +117,10 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to scale up pods: %w", err)
 	}
 
-	if setDefaults {
-		err = swapDefaultStorageClasses(ctx, w, clientset, sourceSCName, destSCName)
+	if options.SetDefaults {
+		err = swapDefaultStorageClasses(ctx, w, clientset, options.SourceSCName, options.DestSCName)
 		if err != nil {
-			return fmt.Errorf("failed to change default StorageClass from %s to %s: %w", sourceSCName, destSCName, err)
+			return fmt.Errorf("failed to change default StorageClass from %s to %s: %w", options.SourceSCName, options.DestSCName, err)
 		}
 	}
 
@@ -489,7 +496,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	return matchingPVCs, namespaces, nil
 }
 
-func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string) error {
+func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, skipSourceValidation bool) error {
 	// get storage providers
 	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -507,7 +514,11 @@ func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8scli
 		}
 	}
 	if !sourceScFound {
-		return fmt.Errorf("unable to find source StorageClass %s", sourceSCName)
+		if skipSourceValidation {
+			w.Printf("\nWarning: unable to find source StorageClass %s, but continuing anyways\n", sourceSCName)
+		} else {
+			return fmt.Errorf("unable to find source StorageClass %s", sourceSCName)
+		}
 	}
 	if !destScFound {
 		return fmt.Errorf("unable to find dest StorageClass %s", destSCName)

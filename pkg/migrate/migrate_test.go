@@ -362,7 +362,7 @@ func TestGetPVCs(t *testing.T) {
 		wantErr      bool
 		originalPVCs map[string][]corev1.PersistentVolumeClaim
 		namespaces   []string
-		validate     func(clientset k8sclient.Interface, t *testing.T) error
+		validate     func(clientset k8sclient.Interface, t *testing.T)
 	}{
 		{
 			name:         "one PV, no PVC",
@@ -379,8 +379,8 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			validate: func(clientset k8sclient.Interface, t *testing.T) error {
-				return nil
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
+				return
 			},
 		},
 		{
@@ -417,19 +417,11 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
 				pvc, err := clientset.CoreV1().PersistentVolumeClaims("ns1").Get(context.TODO(), "pvc1-pvcmigrate", metav1.GetOptions{})
-				if err != nil {
-					return err
-				}
-				if *pvc.Spec.StorageClassName != dscString {
-					return fmt.Errorf("storage class name was %q not dsc", *pvc.Spec.StorageClassName)
-				}
-
-				if pvc.Spec.Resources.Requests.Storage().String() != "1Gi" {
-					return fmt.Errorf("PVC size was %q not 1Gi", pvc.Spec.Resources.Requests.Storage().String())
-				}
-				return nil
+				require.NoError(t, err)
+				require.Equalf(t, dscString, *pvc.Spec.StorageClassName, "storage class name was %q not dsc", *pvc.Spec.StorageClassName)
+				require.Equalf(t, "1Gi", pvc.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc.Spec.Resources.Requests.Storage().String())
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
 				"ns1": {
@@ -462,8 +454,8 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			validate: func(clientset k8sclient.Interface, t *testing.T) error {
-				return nil
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
+				return
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
 			namespaces:   []string{},
@@ -540,15 +532,10 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			validate: func(clientset k8sclient.Interface, t *testing.T) error {
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
 				pvc, err := clientset.CoreV1().PersistentVolumeClaims("ns1").Get(context.TODO(), "pvc1-pvcmigrate", metav1.GetOptions{})
-				if err != nil {
-					return err
-				}
-				if pvc.Labels["test"] != "retained" {
-					return fmt.Errorf("PVC was recreated instead of retained")
-				}
-				return nil
+				require.NoError(t, err)
+				require.Equalf(t, "retained", pvc.Labels["test"], "PVC was recreated instead of retained")
 			},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
 				"ns1": {
@@ -646,9 +633,81 @@ func TestGetPVCs(t *testing.T) {
 			destScName:   "",
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
 			namespaces:   []string{},
-			validate: func(clientset k8sclient.Interface, t *testing.T) error {
-				return nil
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
+				return
 			},
+		},
+		{
+			name:         "one PV, one PVC, interesting accessmode",
+			sourceScName: "sc1",
+			destScName:   "dsc",
+			wantErr:      false,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+							corev1.ReadWriteOnce,
+						},
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv1",
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+							corev1.ReadWriteOnce,
+						},
+					},
+				},
+			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
+				pvc, err := clientset.CoreV1().PersistentVolumeClaims("ns1").Get(context.TODO(), "pvc1-pvcmigrate", metav1.GetOptions{})
+				require.NoError(t, err)
+				require.Equalf(t, dscString, *pvc.Spec.StorageClassName, "storage class name was %q not dsc", *pvc.Spec.StorageClassName)
+				require.Equalf(t, "1Gi", pvc.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc.Spec.Resources.Requests.Storage().String())
+
+				require.Equal(t, []corev1.PersistentVolumeAccessMode{
+					corev1.ReadWriteMany,
+					corev1.ReadWriteOnce,
+				}, pvc.Spec.AccessModes)
+			},
+			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
+							AccessModes: []corev1.PersistentVolumeAccessMode{
+								corev1.ReadWriteMany,
+								corev1.ReadWriteOnce,
+							},
+						},
+					},
+				},
+			},
+			namespaces: []string{"ns1"},
 		},
 	}
 
@@ -665,8 +724,7 @@ func TestGetPVCs(t *testing.T) {
 				return
 			}
 
-			err = test.validate(clientset, t)
-			req.NoError(err)
+			test.validate(clientset, t)
 
 			req.Equal(test.originalPVCs, originalPVCs)
 			req.Equal(test.namespaces, nses)

@@ -481,9 +481,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 							corev1.ResourceStorage: desiredPvStorage,
 						},
 					},
-					AccessModes: []corev1.PersistentVolumeAccessMode{
-						corev1.ReadWriteOnce,
-					},
+					AccessModes: nsPvc.Spec.AccessModes,
 				},
 			}, metav1.CreateOptions{})
 			if err != nil {

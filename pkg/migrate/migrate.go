@@ -913,6 +913,16 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to delete migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)
 	}
 
+	// wait for the deleted PVCs to actually no longer exist
+	err = waitForDeletion(ctx, clientset, pvcName, ns)
+	if err != nil {
+		return fmt.Errorf("failed to ensure deletion of original PVC %s in %s: %w", pvcName, ns, err)
+	}
+	err = waitForDeletion(ctx, clientset, newPvcName(pvcName), ns)
+	if err != nil {
+		return fmt.Errorf("failed to ensure deletion of migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)
+	}
+
 	// remove claimrefs from original and migrated-to PVs
 	w.Printf("Removing claimref from original PV %s\n", originalPVC.Spec.VolumeName)
 	err = mutatePV(ctx, w, clientset, originalPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
@@ -984,6 +994,26 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 	// success message
 	w.Printf("Successfully migrated PVC %s in %s from PV %s to %s\n", pvcName, ns, originalPVC.Spec.VolumeName, migratedPVC.Spec.VolumeName)
+	return nil
+}
+
+// waitForDeletion waits for the provided pvcName to not be found, and returns early if any error besides 'not found' is given
+func waitForDeletion(ctx context.Context, clientset k8sclient.Interface, pvcName, ns string) error {
+	for true {
+		_, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, pvcName, metav1.GetOptions{})
+		if k8serrors.IsNotFound(err) {
+			break
+		} else if err != nil {
+			return err
+		}
+
+		select {
+		case <-time.After(time.Second / 20):
+			continue
+		case <-ctx.Done():
+			return fmt.Errorf("context ended waiting for PVC %s in %s to be deleted", pvcName, ns)
+		}
+	}
 	return nil
 }
 

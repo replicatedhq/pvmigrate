@@ -907,17 +907,19 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	if err != nil {
 		return fmt.Errorf("failed to delete original PVC %s in %s: %w", pvcName, ns, err)
 	}
-	w.Printf("Deleting migrated-to PVC %s in %s to release the PV\n", pvcName, ns)
+	w.Printf("Deleting migrated-to PVC %s in %s to release the PV\n", newPvcName(pvcName), ns)
 	err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, newPvcName(pvcName), metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)
 	}
 
 	// wait for the deleted PVCs to actually no longer exist
+	w.Printf("Waiting for original PVC %s in %s to finish deleting\n", pvcName, ns)
 	err = waitForDeletion(ctx, clientset, pvcName, ns)
 	if err != nil {
 		return fmt.Errorf("failed to ensure deletion of original PVC %s in %s: %w", pvcName, ns, err)
 	}
+	w.Printf("Waiting for migrated-to PVC %s in %s to finish deleting\n", newPvcName(pvcName), ns)
 	err = waitForDeletion(ctx, clientset, newPvcName(pvcName), ns)
 	if err != nil {
 		return fmt.Errorf("failed to ensure deletion of migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)

@@ -2162,3 +2162,51 @@ func Test_swapDefaults(t *testing.T) {
 		})
 	}
 }
+
+func Test_waitForDeletion(t *testing.T) {
+	tests := []struct {
+		name           string
+		backgroundFunc func(context.Context, *log.Logger, k8sclient.Interface)
+	}{
+		{
+			name: "wait 0.5s",
+			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
+				// wait a period of time before deleting the PVC
+				time.Sleep(time.Second / 2)
+				err := k.CoreV1().PersistentVolumeClaims("test").Delete(ctx, "test", metav1.DeleteOptions{})
+				if err != nil {
+					logger.Printf("got error deleting pvc test in test: %s", err.Error())
+				}
+				logger.Printf("deleted PVC")
+				return
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
+			defer cancelfunc()
+			clientset := fake.NewSimpleClientset(
+				[]runtime.Object{
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "test",
+							Namespace: "test",
+						},
+					},
+				}...,
+			)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			if tt.backgroundFunc != nil {
+				go tt.backgroundFunc(testCtx, testlog, clientset)
+			}
+			err := waitForDeletion(testCtx, clientset, "test", "test")
+			req.NoError(err)
+			actualPVC, err := clientset.CoreV1().PersistentVolumeClaims("test").Get(testCtx, "test", metav1.GetOptions{})
+			req.Errorf(err, "the PVC 'test' in 'test' should not have been found after waiting for its deletion")
+			var nilPVC *corev1.PersistentVolumeClaim
+			req.Equal(nilPVC, actualPVC)
+		})
+	}
+}

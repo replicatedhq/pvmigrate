@@ -525,8 +525,21 @@ func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8scli
 	return nil
 }
 
+const nameSuffix = "-pvcmigrate"
+
+// if the length after adding the suffix is more than 63 characters, we need to reduce that to fit within k8s limits
+// pruning from the end runs the risk of dropping the '0'/'1'/etc of a statefulset's PVC name
+// pruning from the front runs the risk of making a-replica-... and b-replica-... collide
+// so this removes characters from the middle of the string
 func newPvcName(originalName string) string {
-	return originalName + "-pvcmigrate"
+	candidate := originalName + nameSuffix
+	if len(candidate) <= 63 {
+		return candidate
+	}
+
+	// remove characters from the middle of the string to reduce the total length to 63 characters
+	newCandidate := candidate[0:31] + candidate[len(candidate)-32:]
+	return newCandidate
 }
 
 // get a PV, apply the selected mutator to the PV, update the PV, use the supplied validator to wait for the update to show up

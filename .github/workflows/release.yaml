@@ -44,6 +44,9 @@ jobs:
           args: release --rm-dist --config deploy/.goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Sleep for release to be available
+        run: sleep 15s
 
       - name: Update new pvmigrate version in krew-index
         uses: rajatjindal/krew-release-bot@v0.0.42

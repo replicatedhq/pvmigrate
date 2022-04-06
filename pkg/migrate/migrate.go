@@ -97,7 +97,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy, time.Second)
 	if err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, verboseCopy bool) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, verboseCopy bool, waitTime time.Duration) error {
 	// create a pod for each PVC migration, and wait for it to finish
 	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
 	for ns, nsPvcs := range matchingPVCs {
@@ -202,7 +202,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			sourcePvcName, destPvcName := nsPvc.Name, newPvcName(nsPvc.Name)
 			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
 
-			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy)
+			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime)
 			if err != nil {
 				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.Name, ns, err)
 			}
@@ -211,7 +211,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool) error {
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration) error {
 	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage)
 	if err != nil {
 		return err
@@ -227,7 +227,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	}()
 
 	// wait for the pod to be created
-	time.Sleep(time.Second * 1)
+	time.Sleep(waitTime)
 	for {
 		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 		if err != nil {
@@ -236,7 +236,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		}
 
 		if gotPod.Status.Phase == corev1.PodPending {
-			time.Sleep(time.Second * 1)
+			time.Sleep(waitTime)
 			continue
 		}
 
@@ -248,44 +248,64 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		w.Printf("got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
 	}
 
-	podLogsReq := clientset.CoreV1().Pods(ns).GetLogs(createdPod.Name, &corev1.PodLogOptions{
-		Container: pvMigrateContainerName,
-		Follow:    true,
-	})
-	podLogs, err := podLogsReq.Stream(ctx)
-	if err != nil {
-		w.Printf("failed to get logs for migration pod %s: %v\n", createdPod.Name, err)
-		// os.Exit(1) // TODO handle
-	}
-
 	w.Printf("migrating PVC %s:\n", sourcePvcName)
-	for {
-		bufPodLogs := bufio.NewReader(podLogs)
-		if bufPodLogs == nil {
-			continue
-		}
-		line, _, err := bufPodLogs.ReadLine()
+
+	var podLogs io.ReadCloser
+	for podLogs == nil {
+		podLogsReq := clientset.CoreV1().Pods(ns).GetLogs(createdPod.Name, &corev1.PodLogOptions{
+			Container: pvMigrateContainerName,
+			Follow:    true,
+		})
+		podLogs, err = podLogsReq.Stream(ctx)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			// if there was an error trying to get the pod logs, check to make sure that the pod is actually running
+			w.Printf("failed to get logs for migration pod %s, checking status: %v\n", createdPod.Name, err)
+
+			gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
+			if err != nil {
+				w.Printf("failed to check status of newly created migration pod %s: %v\n", createdPod.Name, err)
+				continue
+			}
+
+			if gotPod.Status.Phase != corev1.PodRunning {
+				// if the pod is not running, go to the "validate success" section
 				break
 			}
-			w.Printf("failed to read pod logs: %v\n", err)
-			break
+
+			//if the pod is running, wait to see if getting logs works in a few seconds
+			time.Sleep(waitTime)
 		}
-		if verboseCopy {
-			w.Printf("    %s\n", line)
-		} else {
-			_, _ = fmt.Fprintf(w.Writer(), ".") // one dot per line of output
-		}
-	}
-	if !verboseCopy {
-		_, _ = fmt.Fprintf(w.Writer(), "done!\n") // add a newline at the end of the dots if not showing pod logs
 	}
 
-	err = podLogs.Close()
-	if err != nil {
-		w.Printf("failed to close logs for migration pod %s: %v\n", createdPod.Name, err)
-		// os.Exit(1) // TODO handle
+	if podLogs != nil {
+		for {
+			bufPodLogs := bufio.NewReader(podLogs)
+			if bufPodLogs == nil {
+				continue
+			}
+			line, _, err := bufPodLogs.ReadLine()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				w.Printf("failed to read pod logs: %v\n", err)
+				break
+			}
+			if verboseCopy {
+				w.Printf("    %s\n", line)
+			} else {
+				_, _ = fmt.Fprintf(w.Writer(), ".") // one dot per line of output
+			}
+		}
+		if !verboseCopy {
+			_, _ = fmt.Fprintf(w.Writer(), "done!\n") // add a newline at the end of the dots if not showing pod logs
+		}
+
+		err = podLogs.Close()
+		if err != nil {
+			w.Printf("failed to close logs for migration pod %s: %v\n", createdPod.Name, err)
+			// os.Exit(1) // TODO handle
+		}
 	}
 
 	// validate that the migration actually completed successfully
@@ -301,7 +321,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 			return fmt.Errorf("logs for the migration pod %s in %s ended, but the status was %s and not succeeded", createdPod.Name, ns, gotPod.Status.Phase)
 		}
 
-		time.Sleep(time.Second * 5)
+		time.Sleep(waitTime)
 	}
 
 	w.Printf("finished migrating PVC %s\n", sourcePvcName)

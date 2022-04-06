@@ -261,6 +261,9 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	w.Printf("migrating PVC %s:\n", sourcePvcName)
 	for {
 		bufPodLogs := bufio.NewReader(podLogs)
+		if bufPodLogs == nil {
+			continue
+		}
 		line, _, err := bufPodLogs.ReadLine()
 		if err != nil {
 			if errors.Is(err, io.EOF) {

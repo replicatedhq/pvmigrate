@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -2238,6 +2239,220 @@ func Test_newPvcName(t *testing.T) {
 			req := require.New(t)
 			got := newPvcName(tt.originalName)
 			req.Equal(tt.want, got)
+		})
+	}
+}
+
+func Test_copyAllPVCs(t *testing.T) {
+	type podEvent struct {
+		podAge    time.Duration
+		podStatus corev1.PodPhase
+	}
+
+	tests := []struct {
+		name         string
+		matchingPVCs map[string][]corev1.PersistentVolumeClaim
+		events       map[string]map[string][]podEvent // map of namespaces to pod names to a list of what status a pod should have and when
+		wantErr      bool
+	}{
+		{
+			name:         "minimal test case",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{},
+			wantErr:      false,
+		},
+		{
+			name: "one PVC",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			wantErr: false,
+			events: map[string]map[string][]podEvent{
+				"ns1": {
+					"migrate-sourcepvc": {
+						{
+							podAge:    time.Millisecond * 100,
+							podStatus: corev1.PodRunning,
+						},
+						{
+							podAge:    time.Millisecond * 200,
+							podStatus: corev1.PodSucceeded,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "one PVC, failure",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			wantErr: true,
+			events: map[string]map[string][]podEvent{
+				"ns1": {
+					"migrate-sourcepvc": {
+						{
+							podAge:    time.Millisecond * 100,
+							podStatus: corev1.PodRunning,
+						},
+						{
+							podAge:    time.Millisecond * 200,
+							podStatus: corev1.PodFailed,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "three PVCs succeed",
+			matchingPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc2",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+				"ns2": {
+					{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc3",
+							Namespace: "ns2",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			wantErr: false,
+			events: map[string]map[string][]podEvent{
+				"ns1": {
+					"migrate-sourcepvc": {
+						{
+							podAge:    time.Millisecond * 100,
+							podStatus: corev1.PodRunning,
+						},
+						{
+							podAge:    time.Millisecond * 200,
+							podStatus: corev1.PodSucceeded,
+						},
+					},
+					"migrate-pvc2": {
+						{
+							podAge:    time.Millisecond * 100,
+							podStatus: corev1.PodSucceeded,
+						},
+					},
+				},
+				"ns2": {
+					"migrate-pvc3": {
+						{
+							podAge:    time.Millisecond * 200,
+							podStatus: corev1.PodSucceeded,
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Second*10) // if your test takes more than 10s, there are issues
+			defer cancelfunc()
+			clientset := fake.NewSimpleClientset()
+			testlog := log.New(testWriter{t: t}, "", 0)
+
+			// handle making the pods start/succeed/fail/etc
+			go func(ctx context.Context, logger *log.Logger, k k8sclient.Interface, events map[string]map[string][]podEvent) {
+				for true {
+					select {
+					case <-time.After(time.Millisecond * 10):
+						for ns, nsEvents := range events {
+							for podName, podEvents := range nsEvents {
+								pod, err := k.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+								if err != nil {
+									if strings.Contains(err.Error(), "not found") {
+										continue
+									}
+
+									logger.Printf("got error checking pod %s in %s: %s", podName, ns, err.Error())
+									return
+								}
+								if pod.Status.StartTime == nil {
+									pod.Status.StartTime = &metav1.Time{Time: time.Now()}
+									pod.Status.Phase = corev1.PodPending
+								} else {
+									for _, event := range podEvents {
+										if time.Now().After(pod.Status.StartTime.Add(event.podAge)) {
+											pod.Status.Phase = event.podStatus
+										}
+									}
+								}
+
+								_, err = k.CoreV1().Pods(ns).UpdateStatus(ctx, pod, metav1.UpdateOptions{})
+								if err != nil {
+									logger.Printf("got error updating pod status: %s", err.Error())
+									return
+								}
+							}
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+			}(testCtx, testlog, clientset, tt.events)
+
+			err := copyAllPVCs(testCtx, testlog, clientset, "sourcesc", "destsc", "testrsyncimage", tt.matchingPVCs, false, time.Millisecond*10)
+			if tt.wantErr {
+				req.Error(err)
+				testlog.Printf("got expected error %q", err.Error())
+				return
+			}
+			req.NoError(err)
 		})
 	}
 }

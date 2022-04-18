@@ -49,6 +49,6 @@ jobs:
         run: sleep 15s
 
       - name: Update new pvmigrate version in krew-index
-        uses: rajatjindal/krew-release-bot@v0.0.42
+        uses: rajatjindal/krew-release-bot@v0.0.43
         with:
           krew_template_file: deploy/krew/pvmigrate.yaml

@@ -419,9 +419,8 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		}
 	}
 
-	// get PVCs (and namespaces) using specified PVs
+	// get PVCs using specified PVs
 	matchingPVCs := map[string][]corev1.PersistentVolumeClaim{}
-	namespaces := []string{}
 	for _, pv := range matchingPVs {
 		if pv.Spec.ClaimRef != nil {
 			pvc, err := clientset.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(ctx, pv.Spec.ClaimRef.Name, metav1.GetOptions{})
@@ -429,10 +428,14 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 			matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], *pvc)
-			namespaces = append(namespaces, pv.Spec.ClaimRef.Namespace)
 		} else {
 			return nil, nil, fmt.Errorf("PV %s does not have an associated PVC - resolve this before rerunning", pv.Name)
 		}
+	}
+
+	pvcNamespaces := []string{}
+	for idx := range matchingPVCs {
+		pvcNamespaces = append(pvcNamespaces, idx)
 	}
 
 	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", len(matchingPVs), len(matchingPVCs))
@@ -514,7 +517,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		}
 	}
 
-	return matchingPVCs, namespaces, nil
+	return matchingPVCs, pvcNamespaces, nil
 }
 
 func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, skipSourceValidation bool) error {

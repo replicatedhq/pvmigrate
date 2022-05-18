@@ -46,7 +46,7 @@ vet:
 
 .PHONY: test
 test: lint vet
-	go test ./... ./cmd/...
+	go test -coverprofile=coverage.out ./... ./cmd/...
 
 .PHONY: build
 build: bin/pvmigrate

@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/pointer"
 )
 
 type testWriter struct {
@@ -360,6 +361,7 @@ func TestGetPVCs(t *testing.T) {
 		resources    []runtime.Object
 		sourceScName string
 		destScName   string
+		namespace    string
 		wantErr      bool
 		originalPVCs map[string][]corev1.PersistentVolumeClaim
 		namespaces   []string
@@ -439,7 +441,6 @@ func TestGetPVCs(t *testing.T) {
 			},
 			namespaces: []string{"ns1"},
 		},
-
 		{
 			name:         "different sc PV",
 			sourceScName: "sc1",
@@ -807,6 +808,95 @@ func TestGetPVCs(t *testing.T) {
 			},
 			namespaces: []string{"ns1"},
 		},
+		{
+			name:         "two PVs, two PVCs with limitation",
+			sourceScName: "sc1",
+			destScName:   "dsc",
+			namespace:    "ns1",
+			wantErr:      false,
+			resources: []runtime.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns1",
+							Name:       "pvc1",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv2",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "sc1",
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							"storage": resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "ns2",
+							Name:       "pvc2",
+							APIVersion: "v1",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "pv1",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc2",
+						Namespace: "ns2",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName:       "pv2",
+						StorageClassName: pointer.String("sc1"),
+					},
+				},
+			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) {
+				pvc1, err := clientset.CoreV1().PersistentVolumeClaims("ns1").Get(context.TODO(), "pvc1-pvcmigrate", metav1.GetOptions{})
+				require.NoError(t, err)
+				require.Equalf(t, dscString, *pvc1.Spec.StorageClassName, "storage class name was %q not dsc", *pvc1.Spec.StorageClassName)
+				require.Equalf(t, "1Gi", pvc1.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc1.Spec.Resources.Requests.Storage().String())
+
+				pvc2, err := clientset.CoreV1().PersistentVolumeClaims("ns2").Get(context.TODO(), "pvc2", metav1.GetOptions{})
+				require.NoError(t, err)
+				require.Equalf(t, "sc1", *pvc2.Spec.StorageClassName, "storage class name was %q not sc1", *pvc2.Spec.StorageClassName)
+
+			},
+			originalPVCs: map[string][]corev1.PersistentVolumeClaim{
+				"ns1": {
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
+						},
+					},
+				},
+			},
+			namespaces: []string{"ns1"},
+		},
 	}
 
 	for _, test := range tests {
@@ -814,7 +904,7 @@ func TestGetPVCs(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName)
+			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName, test.namespace)
 			if !test.wantErr {
 				req.NoError(err)
 			} else {

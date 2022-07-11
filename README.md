@@ -16,7 +16,8 @@ pvmigrate --source-sc default --dest-sc mynewsc
 | Flag                     | Type   | Required | Default          | Description                                                                                      |
 |--------------------------|--------|----------|------------------|--------------------------------------------------------------------------------------------------|
 | --source-sc              | String | ✓        |                  | storage provider name to migrate from                                                            |
-| --dest-sc                | String | ✓        |                  | storage provider name to migrate to                                                              |
+| --dest-sc                | String | ✓        |                  | storage provider name to migrate to
+| --namespace              | String |          |                  | namespace to find all PVCs                                                               |
 | --rsync-image            | String |          | eeacms/rsync:2.3 | the image to use to copy PVCs - must have 'rsync' on the path                                    |
 | --set-defaults           | Bool   |          | false            | change default storage class from source to dest                                                 |
 | --verbose-copy           | Bool   |          | false            | show output from the rsync command used to copy data between PVCs                                |

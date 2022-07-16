@@ -58,3 +58,4 @@ jobs:
         with:
           lcov-file: ./coverage.lcov
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          delete-old-comments: true

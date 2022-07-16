@@ -89,7 +89,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)
+	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options)
 	if err != nil {
 		return err
 	}
@@ -404,7 +404,9 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to arrays of original PVCs
 // an array of namespaces that the PVCs were found within
 // an error, if one was encountered
-func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]corev1.PersistentVolumeClaim, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options Options) (map[string][]corev1.PersistentVolumeClaim, []string, error) {
+	sourceSCName, destSCName, namespace := options.SourceSCName, options.DestSCName, options.Namespace
+
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -430,7 +432,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 
-			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
+			if pv.Spec.ClaimRef.Namespace == namespace || namespace == "" {
 				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], *pvc)
 			}
 
@@ -458,7 +460,16 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return nil, nil, fmt.Errorf("failed to print PVCs: %w", err)
 	}
 
-	// create new PVCs for each matching PVC
+	err = createDestinationPVCs(ctx, w, clientset, destSCName, matchingPVCs, pvsByName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return matchingPVCs, pvcNamespaces, nil
+}
+
+// create new PVCs in the destination storageclass for each matching PVC with matching size and accessMode
+func createDestinationPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, destSCName string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, pvsByName map[string]corev1.PersistentVolume) error {
 	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
@@ -466,19 +477,19 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 			desiredPV, ok := pvsByName[nsPvc.Spec.VolumeName]
 			if !ok {
-				return nil, nil, fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+				return fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
 			}
 
 			desiredPvStorage, ok := desiredPV.Spec.Capacity[corev1.ResourceStorage]
 			if !ok {
-				return nil, nil, fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+				return fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
 			}
 
 			// check to see if the desired PVC name already exists (and is appropriate)
 			existingPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, newName, metav1.GetOptions{})
 			if err != nil {
 				if !k8serrors.IsNotFound(err) {
-					return nil, nil, fmt.Errorf("failed to find existing PVC: %w", err)
+					return fmt.Errorf("failed to find existing PVC: %w", err)
 				}
 			} else if existingPVC != nil {
 				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == destSCName {
@@ -488,10 +499,10 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 						w.Printf("found existing PVC with name %s, not creating new one\n", newName)
 						continue
 					} else {
-						return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.Name)
+						return fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.Name)
 					}
 				} else {
-					return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.Name)
+					return fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.Name)
 				}
 			}
 
@@ -517,13 +528,12 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				},
 			}, metav1.CreateOptions{})
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to create new PVC %s in %s: %w", newName, ns, err)
+				return fmt.Errorf("failed to create new PVC %s in %s: %w", newName, ns, err)
 			}
 			w.Printf("created new PVC %s with size %v in %s\n", newName, newPVC.Spec.Resources.Requests.Storage().String(), ns)
 		}
 	}
-
-	return matchingPVCs, pvcNamespaces, nil
+	return nil
 }
 
 func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, skipSourceValidation bool) error {

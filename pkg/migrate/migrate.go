@@ -44,6 +44,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
+	DryRun               bool
 }
 
 // Cli uses CLI options to run Migrate
@@ -57,6 +58,7 @@ func Cli() {
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
+	flag.BoolVar(&options.DryRun, "dry-run", false, "do not apply changes to the cluster and instead print what resources would be impacted")
 
 	flag.Parse()
 
@@ -94,9 +96,14 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
+	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5, options.DryRun)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
+	}
+
+	if options.DryRun {
+		w.Printf("\nDry Run Complete\n")
+		return nil
 	}
 
 	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy, time.Second)
@@ -460,9 +467,12 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return nil, nil, fmt.Errorf("failed to print PVCs: %w", err)
 	}
 
-	err = createDestinationPVCs(ctx, w, clientset, destSCName, matchingPVCs, pvsByName)
-	if err != nil {
-		return nil, nil, err
+	// do not create destination PVCs if this is a dry run
+	if !options.DryRun {
+		err = createDestinationPVCs(ctx, w, clientset, destSCName, matchingPVCs, pvsByName)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return matchingPVCs, pvcNamespaces, nil
@@ -669,8 +679,8 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // scaleDownPods scales down statefulsets & deployments controlling pods mounting PVCs in a supplied list
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
-// if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
+// if dryRun is true, it will print the deployments and statefulsets to be scaled but will not actually modify them.
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, checkInterval time.Duration, dryRun bool) error {
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
@@ -769,6 +779,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					}
 
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
+					if dryRun {
+						continue
+					}
+
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
@@ -807,6 +821,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					}
 
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
+					if dryRun {
+						continue
+					}
+
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
@@ -816,6 +834,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				}
 			}
 		}
+	}
+
+	if dryRun {
+		w.Printf("Not waiting for pods to be cleaned up as this is a dry run\n")
+		return nil
 	}
 
 	// wait for all pods to be deleted

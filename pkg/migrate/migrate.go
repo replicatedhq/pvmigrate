@@ -374,6 +374,8 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 						"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
 						"-v",       // show verbose output
 						"-P",       // show progress, and resume aborted/partial transfers
+						"--no-o",   // no-owner
+						"--no-g",   // no-group
 						"--delete", // delete files in dest that are not in source
 						"/source/",
 						"/dest",

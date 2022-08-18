@@ -44,6 +44,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
+	DryRun               bool
 }
 
 // Cli uses CLI options to run Migrate
@@ -57,6 +58,7 @@ func Cli() {
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
+	flag.BoolVar(&options.DryRun, "dry-run", false, "do not apply changes to the cluster and instead print what resources would be impacted")
 
 	flag.Parse()
 
@@ -89,14 +91,19 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)
+	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options)
 	if err != nil {
 		return err
 	}
 
-	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
+	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5, options.DryRun)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
+	}
+
+	if options.DryRun {
+		w.Printf("\nDry Run Complete\n")
+		return nil
 	}
 
 	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy, time.Second)
@@ -404,7 +411,9 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to arrays of original PVCs
 // an array of namespaces that the PVCs were found within
 // an error, if one was encountered
-func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]corev1.PersistentVolumeClaim, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options Options) (map[string][]corev1.PersistentVolumeClaim, []string, error) {
+	sourceSCName, destSCName, namespace := options.SourceSCName, options.DestSCName, options.Namespace
+
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -430,7 +439,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 
-			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
+			if pv.Spec.ClaimRef.Namespace == namespace || namespace == "" {
 				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], *pvc)
 			}
 
@@ -458,7 +467,19 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return nil, nil, fmt.Errorf("failed to print PVCs: %w", err)
 	}
 
-	// create new PVCs for each matching PVC
+	// do not create destination PVCs if this is a dry run
+	if !options.DryRun {
+		err = createDestinationPVCs(ctx, w, clientset, destSCName, matchingPVCs, pvsByName)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return matchingPVCs, pvcNamespaces, nil
+}
+
+// create new PVCs in the destination storageclass for each matching PVC with matching size and accessMode
+func createDestinationPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, destSCName string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, pvsByName map[string]corev1.PersistentVolume) error {
 	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
@@ -466,19 +487,19 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 			desiredPV, ok := pvsByName[nsPvc.Spec.VolumeName]
 			if !ok {
-				return nil, nil, fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+				return fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
 			}
 
 			desiredPvStorage, ok := desiredPV.Spec.Capacity[corev1.ResourceStorage]
 			if !ok {
-				return nil, nil, fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+				return fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
 			}
 
 			// check to see if the desired PVC name already exists (and is appropriate)
 			existingPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, newName, metav1.GetOptions{})
 			if err != nil {
 				if !k8serrors.IsNotFound(err) {
-					return nil, nil, fmt.Errorf("failed to find existing PVC: %w", err)
+					return fmt.Errorf("failed to find existing PVC: %w", err)
 				}
 			} else if existingPVC != nil {
 				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == destSCName {
@@ -488,10 +509,10 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 						w.Printf("found existing PVC with name %s, not creating new one\n", newName)
 						continue
 					} else {
-						return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.Name)
+						return fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.Name)
 					}
 				} else {
-					return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.Name)
+					return fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.Name)
 				}
 			}
 
@@ -517,13 +538,12 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				},
 			}, metav1.CreateOptions{})
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to create new PVC %s in %s: %w", newName, ns, err)
+				return fmt.Errorf("failed to create new PVC %s in %s: %w", newName, ns, err)
 			}
 			w.Printf("created new PVC %s with size %v in %s\n", newName, newPVC.Spec.Resources.Requests.Storage().String(), ns)
 		}
 	}
-
-	return matchingPVCs, pvcNamespaces, nil
+	return nil
 }
 
 func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, skipSourceValidation bool) error {
@@ -659,8 +679,8 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // scaleDownPods scales down statefulsets & deployments controlling pods mounting PVCs in a supplied list
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
-// if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
+// if dryRun is true, it will print the deployments and statefulsets to be scaled but will not actually modify them.
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, checkInterval time.Duration, dryRun bool) error {
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
@@ -759,6 +779,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					}
 
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
+					if dryRun {
+						continue
+					}
+
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
@@ -797,6 +821,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					}
 
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
+					if dryRun {
+						continue
+					}
+
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
 						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
@@ -806,6 +834,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				}
 			}
 		}
+	}
+
+	if dryRun {
+		w.Printf("Not waiting for pods to be cleaned up as this is a dry run\n")
+		return nil
 	}
 
 	// wait for all pods to be deleted

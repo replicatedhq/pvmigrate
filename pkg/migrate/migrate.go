@@ -443,7 +443,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 			pvcInfo.claim = pvc
 
 			// find pod which use the pvc
-			pods, err := clientset.CoreV1().Pods(pvc.GetNamespace()).List(ctx, metav1.ListOptions{})
+			/* pods, err := clientset.CoreV1().Pods(pvc.GetNamespace()).List(ctx, metav1.ListOptions{})
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to list pods for PVC %s (bound to volume %s) in %s namespace: %w", pvc.Name, pv.Name, pvc.Namespace, err)
 			}
@@ -459,7 +459,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				if podFound {
 					break
 				}
-			}
+			} */
 
 			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
 				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvcInfo)

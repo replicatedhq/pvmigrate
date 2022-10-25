@@ -223,6 +223,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 }
 
 func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration, nodeName string) error {
+	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
 	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage, nodeName)
 	if err != nil {
 		return err
@@ -709,7 +710,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.claim.Name {
 							matchingPods[ns] = append(matchingPods[ns], nsPod)
 							matchingPodsCount++
-							//TODO not sure if this will work
+							//TODO: not sure if this will work
 							(*matchingPVCs)[ns][idx] = pvcCtx{nsPvClaim.claim, &nsPod}
 							break perPodLoop // exit the for _, podVol := range nsPod.Spec.Volumes loop, as we've already determined that this pod matches
 						}

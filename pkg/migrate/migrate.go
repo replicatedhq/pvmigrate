@@ -349,7 +349,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 
 func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string) (*corev1.Pod, error) {
 
-	// only apply nodeAffinity when we have determined a nodeName for the pod consuming the PVC
+	// apply nodeAffinity when migrating to a local volume provisioner
 	var nodeAffinity *corev1.Affinity
 	if isDestScLocalVolumeProvisioner && nodeName != "" {
 		nodeAffinity = &corev1.Affinity{
@@ -472,25 +472,6 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 			pvcInfo.claim = pvc
-
-			// find pod which use the pvc
-			/* pods, err := clientset.CoreV1().Pods(pvc.GetNamespace()).List(ctx, metav1.ListOptions{})
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to list pods for PVC %s (bound to volume %s) in %s namespace: %w", pvc.Name, pv.Name, pvc.Namespace, err)
-			}
-			var podFound bool
-			for _, pod := range pods.Items {
-				for _, volume := range pod.Spec.Volumes {
-					if volume.PersistentVolumeClaim.ClaimName == pvc.Name {
-						pvcInfo.usedByPod = &pod
-						podFound = true
-						break
-					}
-				}
-				if podFound {
-					break
-				}
-			} */
 
 			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
 				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvcInfo)

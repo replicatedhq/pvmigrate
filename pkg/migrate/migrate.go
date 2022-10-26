@@ -52,6 +52,9 @@ type pvcCtx struct {
 }
 
 func (pvc pvcCtx) getNodeNameRef() string {
+	if pvc.usedByPod == nil {
+		return ""
+	}
 	return pvc.usedByPod.Spec.NodeName
 }
 
@@ -341,6 +344,29 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 }
 
 func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string) (*corev1.Pod, error) {
+
+	// only apply nodeAffinity when we have determined a nodeName for the pod consuming the PVC
+	var nodeAffinity *corev1.Affinity
+	if nodeName != "" {
+		nodeAffinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "kubernetes.io/hostname",
+									Operator: corev1.NodeSelectorOperator("In"),
+									Values:   []string{nodeName},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
 	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -354,7 +380,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      nodeName,
+			Affinity:      nodeAffinity,
 			RestartPolicy: corev1.RestartPolicyNever,
 			Volumes: []corev1.Volume{
 				{
@@ -702,15 +728,18 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
 		}
 		for _, nsPod := range nsPods.Items {
+			nsPod := nsPod // need a new var that is per-iteration, NOT per-loop
 
 		perPodLoop:
 			for _, podVol := range nsPod.Spec.Volumes {
 				if podVol.PersistentVolumeClaim != nil {
 					for idx, nsPvClaim := range nsPvcs {
+						nsPvClaim := nsPvClaim // need a new var that is per-iteration, NOT per-loop
 						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.claim.Name {
 							matchingPods[ns] = append(matchingPods[ns], nsPod)
 							matchingPodsCount++
-							//TODO: not sure if this will work
+							// when migrating the pvc data we'll use the nodeName in the podSpec to create the volume
+							// on the node where the pod was originally scheduled on
 							(*matchingPVCs)[ns][idx] = pvcCtx{nsPvClaim.claim, &nsPod}
 							break perPodLoop // exit the for _, podVol := range nsPod.Spec.Volumes loop, as we've already determined that this pod matches
 						}

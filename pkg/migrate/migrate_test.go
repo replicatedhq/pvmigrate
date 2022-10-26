@@ -962,8 +962,96 @@ func Test_createMigrationPod(t *testing.T) {
 					},
 				},
 				Spec: corev1.PodSpec{
-
-					NodeName:      "node1",
+					Affinity: &corev1.Affinity{
+						NodeAffinity: &corev1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "kubernetes.io/hostname",
+												Operator: corev1.NodeSelectorOperator("In"),
+												Values:   []string{"node1"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "source",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "sourcepvc",
+								},
+							},
+						},
+						{
+							Name: "dest",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "destpvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "pvmigrate",
+							Image: "imagename",
+							Command: []string{
+								"rsync",
+							},
+							Args: []string{
+								"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+								"-v",       // show verbose output
+								"-P",       // show progress, and resume aborted/partial transfers
+								"--delete", // delete files in dest that are not in source
+								"/source/",
+								"/dest",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/source",
+									Name:      "source",
+								},
+								{
+									MountPath: "/dest",
+									Name:      "dest",
+								},
+							},
+						},
+					},
+				},
+				Status: corev1.PodStatus{},
+			},
+		},
+		{
+			name: "nodeName is empty string",
+			args: args{
+				ns:            "testns",
+				sourcePvcName: "sourcepvc",
+				destPvcName:   "destpvc",
+				rsyncImage:    "imagename",
+				nodeName:      "",
+			},
+			want: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "migrate-sourcepvc",
+					Namespace: "testns",
+					Labels: map[string]string{
+						baseAnnotation: "sourcepvc",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Affinity:      nil,
 					RestartPolicy: corev1.RestartPolicyNever,
 					Volumes: []corev1.Volume{
 						{

@@ -35,6 +35,10 @@ const IsDefaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-c
 
 const pvMigrateContainerName = "pvmigrate"
 
+const openEBSLocalProvisioner = "openebs.io/local"
+
+var isDestScLocalVolumeProvisioner bool
+
 // Options is the set of options that should be provided to Migrate
 type Options struct {
 	SourceSCName         string
@@ -347,7 +351,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 
 	// only apply nodeAffinity when we have determined a nodeName for the pod consuming the PVC
 	var nodeAffinity *corev1.Affinity
-	if nodeName != "" {
+	if isDestScLocalVolumeProvisioner && nodeName != "" {
 		nodeAffinity = &corev1.Affinity{
 			NodeAffinity: &corev1.NodeAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
@@ -599,6 +603,10 @@ func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8scli
 		}
 		if sc.Name == destSCName {
 			destScFound = true
+
+			if sc.Provisioner == openEBSLocalProvisioner {
+				isDestScLocalVolumeProvisioner = true
+			}
 		}
 	}
 	if !sourceScFound {
@@ -718,6 +726,7 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
+// NOTE: this funcation updates the matchingPVCs map with the pod which consumes the pvc
 func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs *map[string][]pvcCtx, checkInterval time.Duration) error {
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}

@@ -935,13 +935,88 @@ func Test_createMigrationPod(t *testing.T) {
 		nodeName      string
 	}
 	tests := []struct {
-		name    string
-		args    args
-		want    *corev1.Pod
-		wantErr bool
+		name            string
+		args            args
+		want            *corev1.Pod
+		wantErr         bool
+		setGlobalFunc   func()
+		clearGlobalFunc func()
 	}{
 		{
 			name: "basic",
+			args: args{
+				ns:            "testns",
+				sourcePvcName: "sourcepvc",
+				destPvcName:   "destpvc",
+				rsyncImage:    "imagename",
+				nodeName:      "node1",
+			},
+			want: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "migrate-sourcepvc",
+					Namespace: "testns",
+					Labels: map[string]string{
+						baseAnnotation: "sourcepvc",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Affinity:      nil,
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "source",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "sourcepvc",
+								},
+							},
+						},
+						{
+							Name: "dest",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "destpvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "pvmigrate",
+							Image: "imagename",
+							Command: []string{
+								"rsync",
+							},
+							Args: []string{
+								"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+								"-v",       // show verbose output
+								"-P",       // show progress, and resume aborted/partial transfers
+								"--delete", // delete files in dest that are not in source
+								"/source/",
+								"/dest",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/source",
+									Name:      "source",
+								},
+								{
+									MountPath: "/dest",
+									Name:      "dest",
+								},
+							},
+						},
+					},
+				},
+				Status: corev1.PodStatus{},
+			},
+		},
+		{
+			name: "desination SC is local volume and nodeName set",
 			args: args{
 				ns:            "testns",
 				sourcePvcName: "sourcepvc",
@@ -1028,6 +1103,12 @@ func Test_createMigrationPod(t *testing.T) {
 				},
 				Status: corev1.PodStatus{},
 			},
+			setGlobalFunc: func() {
+				isDestScLocalVolumeProvisioner = true
+			},
+			clearGlobalFunc: func() {
+				isDestScLocalVolumeProvisioner = false
+			},
 		},
 		{
 			name: "nodeName is empty string",
@@ -1101,13 +1182,29 @@ func Test_createMigrationPod(t *testing.T) {
 				},
 				Status: corev1.PodStatus{},
 			},
+			setGlobalFunc: func() {
+				isDestScLocalVolumeProvisioner = true
+			},
+			clearGlobalFunc: func() {
+				isDestScLocalVolumeProvisioner = false
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset()
+
+			if tt.setGlobalFunc != nil {
+				tt.setGlobalFunc()
+			}
+
 			got, err := createMigrationPod(context.Background(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage, tt.args.nodeName)
+
+			if tt.clearGlobalFunc != nil {
+				tt.clearGlobalFunc()
+			}
+
 			if tt.wantErr {
 				req.Error(err)
 				return

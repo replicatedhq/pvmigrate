@@ -311,7 +311,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	}
 
 	// validate that the migration actually completed successfully
-	for true {
+	for {
 		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to get the migration pod %s in %s to confirm that it ran successfully: %w", createdPod.Name, ns, err)
@@ -812,7 +812,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	w.Printf("\nWaiting for pods with mounted PVCs to be cleaned up\n")
 	time.Sleep(checkInterval / 16)
 checkPvcPodLoop:
-	for true {
+	for {
 		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {
@@ -976,10 +976,7 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		volume.Spec.ClaimRef = nil
 		return volume
 	}, func(volume *corev1.PersistentVolume) bool {
-		if volume.Spec.ClaimRef == nil {
-			return true
-		}
-		return false
+		return volume.Spec.ClaimRef == nil
 	})
 	if err != nil {
 		return fmt.Errorf("failed to remove claimrefs from PV %s: %w", originalPVC.Spec.VolumeName, err)
@@ -989,10 +986,7 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		volume.Spec.ClaimRef = nil
 		return volume
 	}, func(volume *corev1.PersistentVolume) bool {
-		if volume.Spec.ClaimRef == nil {
-			return true
-		}
-		return false
+		return volume.Spec.ClaimRef == nil
 	})
 	if err != nil {
 		return fmt.Errorf("failed to remove claimrefs from PV %s: %w", migratedPVC.Spec.VolumeName, err)
@@ -1046,7 +1040,7 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 // waitForDeletion waits for the provided pvcName to not be found, and returns early if any error besides 'not found' is given
 func waitForDeletion(ctx context.Context, clientset k8sclient.Interface, pvcName, ns string) error {
-	for true {
+	for {
 		_, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, pvcName, metav1.GetOptions{})
 		if k8serrors.IsNotFound(err) {
 			break

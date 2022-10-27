@@ -382,9 +382,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			validate: func(clientset k8sclient.Interface, t *testing.T) {
-				return
-			},
+			validate: func(clientset k8sclient.Interface, t *testing.T) {},
 		},
 		{
 			name:         "one PV, one PVC",
@@ -456,9 +454,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 				},
 			},
-			validate: func(clientset k8sclient.Interface, t *testing.T) {
-				return
-			},
+			validate:     func(clientset k8sclient.Interface, t *testing.T) {},
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
 			namespaces:   []string{},
 		},
@@ -635,9 +631,7 @@ func TestGetPVCs(t *testing.T) {
 			destScName:   "",
 			originalPVCs: map[string][]corev1.PersistentVolumeClaim{},
 			namespaces:   []string{},
-			validate: func(clientset k8sclient.Interface, t *testing.T) {
-				return
-			},
+			validate:     func(clientset k8sclient.Interface, t *testing.T) {},
 		},
 		{
 			name:         "one PV, one PVC, interesting accessmode",
@@ -1774,7 +1768,7 @@ func Test_scaleDownPods(t *testing.T) {
 			nsList:  []string{"ns1"},
 			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
 				// watch for the statefulset to be scaled down, and then delete the pod
-				for true {
+				for {
 					select {
 					case <-time.After(time.Second / 100):
 						// check statefulset, maybe delete pod
@@ -1918,7 +1912,7 @@ func Test_scaleDownPods(t *testing.T) {
 			nsList:  []string{"ns1"},
 			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
 				// watch for the deployment to be scaled down, and then delete the pod
-				for true {
+				for {
 					select {
 					case <-time.After(time.Second / 100):
 						// check deployment, maybe delete pod
@@ -2366,7 +2360,6 @@ func Test_waitForDeletion(t *testing.T) {
 					logger.Printf("got error deleting pvc test in test: %s", err.Error())
 				}
 				logger.Printf("deleted PVC")
-				return
 			},
 		},
 	}
@@ -2595,7 +2588,7 @@ func Test_copyAllPVCs(t *testing.T) {
 
 			// handle making the pods start/succeed/fail/etc
 			go func(ctx context.Context, logger *log.Logger, k k8sclient.Interface, events map[string]map[string][]podEvent) {
-				for true {
+				for {
 					select {
 					case <-time.After(time.Millisecond * 10):
 						for ns, nsEvents := range events {

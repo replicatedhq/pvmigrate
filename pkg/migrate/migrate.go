@@ -110,12 +110,12 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	err = scaleDownPods(ctx, w, clientset, &matchingPVCs, time.Second*5)
+	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy, time.Second)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Second)
 	if err != nil {
 		return err
 	}
@@ -707,15 +707,19 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-// NOTE: this funcation updates the matchingPVCs map with the pod which consumes the pvc
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs *map[string][]pvcCtx, checkInterval time.Duration) error {
+// It returns a map of namespace to PVCs and any errors encountered.
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]pvcCtx, checkInterval time.Duration) (map[string][]pvcCtx, error) {
+
+	// build new map with complete pvcCtx
+	updatedPVCs := matchingPVCs
+
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
-	for ns, nsPvcs := range *matchingPVCs {
+	for ns, nsPvcs := range matchingPVCs {
 		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
+			return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
 		}
 		for _, nsPod := range nsPods.Items {
 			nsPod := nsPod // need a new var that is per-iteration, NOT per-loop
@@ -730,7 +734,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 							matchingPodsCount++
 							// when migrating the pvc data we'll use the nodeName in the podSpec to create the volume
 							// on the node where the pod was originally scheduled on
-							(*matchingPVCs)[ns][idx] = pvcCtx{nsPvClaim.claim, &nsPod}
+							updatedPVCs[ns][idx] = pvcCtx{nsPvClaim.claim, &nsPod}
 							break perPodLoop // exit the for _, podVol := range nsPod.Spec.Volumes loop, as we've already determined that this pod matches
 						}
 					}
@@ -749,7 +753,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	}
 	err := tw.Flush()
 	if err != nil {
-		return fmt.Errorf("failed to print Pods: %w", err)
+		return nil, fmt.Errorf("failed to print Pods: %w", err)
 	}
 
 	// get owners controlling specified pods
@@ -773,11 +777,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
 					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
 					if err != nil {
-						return fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
+						return nil, fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
 					}
 				} else {
 					// TODO: handle properly
-					return fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
+					return nil, fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
 				}
 			}
 		}
@@ -793,7 +797,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				case "StatefulSet":
 					ss, err := clientset.AppsV1().StatefulSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -814,24 +818,24 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				case "ReplicaSet":
 					rs, err := clientset.AppsV1().ReplicaSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
 					}
 
 					if len(rs.OwnerReferences) != 1 {
-						return fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
+						return nil, fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
 					}
 					if rs.OwnerReferences[0].Kind != "Deployment" {
-						return fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
+						return nil, fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
 					}
 
 					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, rs.OwnerReferences[0].Name, metav1.GetOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -852,10 +856,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				default:
-					return fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
+					return nil, fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
 				}
 			}
 		}
@@ -865,11 +869,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	w.Printf("\nWaiting for pods with mounted PVCs to be cleaned up\n")
 	time.Sleep(checkInterval / 16)
 checkPvcPodLoop:
-	for true {
-		for ns, nsPvcs := range *matchingPVCs {
+	for {
+		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {
-				return fmt.Errorf("failed to get pods in %s: %w", ns, err)
+				return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
 			}
 			for _, nsPod := range nsPods.Items {
 				for _, podVol := range nsPod.Spec.Volumes {
@@ -877,7 +881,7 @@ checkPvcPodLoop:
 						for _, nsClaim := range nsPvcs {
 							if podVol.PersistentVolumeClaim.ClaimName == nsClaim.claim.Name {
 								if nsPod.CreationTimestamp.After(migrationStartTime) {
-									return fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.claim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
+									return nil, fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.claim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
 								}
 
 								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, waiting\n", nsPod.Name, ns, nsClaim.claim.Name)
@@ -894,7 +898,7 @@ checkPvcPodLoop:
 	}
 
 	w.Printf("All pods removed successfully\n")
-	return nil
+	return updatedPVCs, nil
 }
 
 func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, namespaces []string) error {

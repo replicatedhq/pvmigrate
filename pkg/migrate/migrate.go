@@ -50,18 +50,6 @@ type Options struct {
 	SkipSourceValidation bool
 }
 
-type pvcCtx struct {
-	claim     *corev1.PersistentVolumeClaim
-	usedByPod *corev1.Pod
-}
-
-func (pvc pvcCtx) getNodeNameRef() string {
-	if pvc.usedByPod == nil {
-		return ""
-	}
-	return pvc.usedByPod.Spec.NodeName
-}
-
 // Cli uses CLI options to run Migrate
 func Cli() {
 	var options Options
@@ -144,6 +132,18 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 	w.Printf("\nSuccess!\n")
 	return nil
+}
+
+type pvcCtx struct {
+	claim     *corev1.PersistentVolumeClaim
+	usedByPod *corev1.Pod
+}
+
+func (pvc pvcCtx) getNodeNameRef() string {
+	if pvc.usedByPod == nil {
+		return ""
+	}
+	return pvc.usedByPod.Spec.NodeName
 }
 
 // swapDefaultStorageClasses attempts to set newDefaultSC as the default StorageClass

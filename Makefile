@@ -41,7 +41,7 @@ deps:
 
 .PHONY: lint
 lint: deps
-	golangci-lint run ./...
+	golangci-lint run --timeout=5m ./...
 
 .PHONY: vet
 vet:

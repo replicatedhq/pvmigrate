@@ -35,6 +35,10 @@ const IsDefaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-c
 
 const pvMigrateContainerName = "pvmigrate"
 
+const openEBSLocalProvisioner = "openebs.io/local"
+
+var isDestScLocalVolumeProvisioner bool
+
 // Options is the set of options that should be provided to Migrate
 type Options struct {
 	SourceSCName         string
@@ -94,21 +98,21 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
+	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy, time.Second)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Second)
 	if err != nil {
 		return err
 	}
 
 	for ns, nsPVCs := range matchingPVCs {
 		for _, nsPVC := range nsPVCs {
-			err = swapPVs(ctx, w, clientset, ns, nsPVC.Name)
+			err = swapPVs(ctx, w, clientset, ns, nsPVC.claim.Name)
 			if err != nil {
-				return fmt.Errorf("failed to swap PVs for PVC %s in %s: %w", nsPVC.Name, ns, err)
+				return fmt.Errorf("failed to swap PVs for PVC %s in %s: %w", nsPVC.claim.Name, ns, err)
 			}
 		}
 	}
@@ -128,6 +132,18 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 	w.Printf("\nSuccess!\n")
 	return nil
+}
+
+type pvcCtx struct {
+	claim     *corev1.PersistentVolumeClaim
+	usedByPod *corev1.Pod
+}
+
+func (pvc pvcCtx) getNodeNameRef() string {
+	if pvc.usedByPod == nil {
+		return ""
+	}
+	return pvc.usedByPod.Spec.NodeName
 }
 
 // swapDefaultStorageClasses attempts to set newDefaultSC as the default StorageClass
@@ -196,25 +212,26 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]corev1.PersistentVolumeClaim, verboseCopy bool, waitTime time.Duration) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]pvcCtx, verboseCopy bool, waitTime time.Duration) error {
 	// create a pod for each PVC migration, and wait for it to finish
 	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
-			sourcePvcName, destPvcName := nsPvc.Name, newPvcName(nsPvc.Name)
-			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
+			sourcePvcName, destPvcName := nsPvc.claim.Name, newPvcName(nsPvc.claim.Name)
+			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.claim.Spec.VolumeName, destPvcName, ns)
 
-			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime)
+			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime, nsPvc.getNodeNameRef())
 			if err != nil {
-				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.Name, ns, err)
+				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.claim.Name, ns, err)
 			}
 		}
 	}
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration) error {
-	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage)
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration, nodeName string) error {
+	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
+	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage, nodeName)
 	if err != nil {
 		return err
 	}
@@ -330,7 +347,30 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	return nil
 }
 
-func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string) (*corev1.Pod, error) {
+func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string) (*corev1.Pod, error) {
+
+	// apply nodeAffinity when migrating to a local volume provisioner
+	var nodeAffinity *corev1.Affinity
+	if isDestScLocalVolumeProvisioner && nodeName != "" {
+		nodeAffinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "kubernetes.io/hostname",
+									Operator: corev1.NodeSelectorOperator("In"),
+									Values:   []string{nodeName},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
 	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -344,6 +384,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 			},
 		},
 		Spec: corev1.PodSpec{
+			Affinity:      nodeAffinity,
 			RestartPolicy: corev1.RestartPolicyNever,
 			Volumes: []corev1.Volume{
 				{
@@ -404,7 +445,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to arrays of original PVCs
 // an array of namespaces that the PVCs were found within
 // an error, if one was encountered
-func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]corev1.PersistentVolumeClaim, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]pvcCtx, []string, error) {
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -422,16 +463,18 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	}
 
 	// get PVCs using specified PVs
-	matchingPVCs := map[string][]corev1.PersistentVolumeClaim{}
+	matchingPVCs := map[string][]pvcCtx{}
+	var pvcInfo pvcCtx
 	for _, pv := range matchingPVs {
 		if pv.Spec.ClaimRef != nil {
 			pvc, err := clientset.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(ctx, pv.Spec.ClaimRef.Name, metav1.GetOptions{})
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
+			pvcInfo.claim = pvc
 
 			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
-				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], *pvc)
+				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvcInfo)
 			}
 
 		} else {
@@ -449,8 +492,8 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	_, _ = fmt.Fprintf(tw, "namespace:\tpvc:\tpv:\tsize:\t\n")
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
-			pvCap := pvsByName[nsPvc.Spec.VolumeName].Spec.Capacity
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t\n", ns, nsPvc.Name, nsPvc.Spec.VolumeName, pvCap.Storage().String())
+			pvCap := pvsByName[nsPvc.claim.Spec.VolumeName].Spec.Capacity
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t\n", ns, nsPvc.claim.Name, nsPvc.claim.Spec.VolumeName, pvCap.Storage().String())
 		}
 	}
 	err = tw.Flush()
@@ -462,16 +505,16 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
-			newName := newPvcName(nsPvc.Name)
+			newName := newPvcName(nsPvc.claim.Name)
 
-			desiredPV, ok := pvsByName[nsPvc.Spec.VolumeName]
+			desiredPV, ok := pvsByName[nsPvc.claim.Spec.VolumeName]
 			if !ok {
-				return nil, nil, fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+				return nil, nil, fmt.Errorf("failed to find existing PV %s for PVC %s in %s", nsPvc.claim.Spec.VolumeName, nsPvc.claim.Name, ns)
 			}
 
 			desiredPvStorage, ok := desiredPV.Spec.Capacity[corev1.ResourceStorage]
 			if !ok {
-				return nil, nil, fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.Spec.VolumeName, nsPvc.Name, ns)
+				return nil, nil, fmt.Errorf("failed to find storage capacity for PV %s for PVC %s in %s", nsPvc.claim.Spec.VolumeName, nsPvc.claim.Name, ns)
 			}
 
 			// check to see if the desired PVC name already exists (and is appropriate)
@@ -488,21 +531,21 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 						w.Printf("found existing PVC with name %s, not creating new one\n", newName)
 						continue
 					} else {
-						return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.Name)
+						return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with size %s instead of %s, cannot create migration target from %s - please delete this to continue", newName, ns, existingSize, desiredPvStorage.String(), nsPvc.claim.Name)
 					}
 				} else {
-					return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.Name)
+					return nil, nil, fmt.Errorf("PVC %s already exists in namespace %s but with storage class %v, cannot create migration target from %s - please delete this to continue", newName, ns, existingPVC.Spec.StorageClassName, nsPvc.claim.Name)
 				}
 			}
 
 			// if it doesn't already exist, create it
 			newPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &corev1.PersistentVolumeClaim{
-				TypeMeta: nsPvc.TypeMeta,
+				TypeMeta: nsPvc.claim.TypeMeta,
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      newName,
 					Namespace: ns,
 					Labels: map[string]string{
-						baseAnnotation: nsPvc.Name,
+						baseAnnotation: nsPvc.claim.Name,
 						kindAnnotation: "dest",
 					},
 				},
@@ -513,7 +556,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 							corev1.ResourceStorage: desiredPvStorage,
 						},
 					},
-					AccessModes: nsPvc.Spec.AccessModes,
+					AccessModes: nsPvc.claim.Spec.AccessModes,
 				},
 			}, metav1.CreateOptions{})
 			if err != nil {
@@ -541,6 +584,10 @@ func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8scli
 		}
 		if sc.Name == destSCName {
 			destScFound = true
+
+			if sc.Provisioner == openEBSLocalProvisioner {
+				isDestScLocalVolumeProvisioner = true
+			}
 		}
 	}
 	if !sourceScFound {
@@ -660,24 +707,34 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
+// It returns a map of namespace to PVCs and any errors encountered.
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]pvcCtx, checkInterval time.Duration) (map[string][]pvcCtx, error) {
+
+	// build new map with complete pvcCtx
+	updatedPVCs := matchingPVCs
+
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
 	matchingPodsCount := 0
 	for ns, nsPvcs := range matchingPVCs {
 		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
+			return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
 		}
 		for _, nsPod := range nsPods.Items {
+			nsPod := nsPod // need a new var that is per-iteration, NOT per-loop
 
 		perPodLoop:
 			for _, podVol := range nsPod.Spec.Volumes {
 				if podVol.PersistentVolumeClaim != nil {
-					for _, nsClaim := range nsPvcs {
-						if podVol.PersistentVolumeClaim.ClaimName == nsClaim.Name {
+					for idx, nsPvClaim := range nsPvcs {
+						nsPvClaim := nsPvClaim // need a new var that is per-iteration, NOT per-loop
+						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.claim.Name {
 							matchingPods[ns] = append(matchingPods[ns], nsPod)
 							matchingPodsCount++
+							// when migrating the pvc data we'll use the nodeName in the podSpec to create the volume
+							// on the node where the pod was originally scheduled on
+							updatedPVCs[ns][idx] = pvcCtx{nsPvClaim.claim, &nsPod}
 							break perPodLoop // exit the for _, podVol := range nsPod.Spec.Volumes loop, as we've already determined that this pod matches
 						}
 					}
@@ -696,7 +753,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	}
 	err := tw.Flush()
 	if err != nil {
-		return fmt.Errorf("failed to print Pods: %w", err)
+		return nil, fmt.Errorf("failed to print Pods: %w", err)
 	}
 
 	// get owners controlling specified pods
@@ -720,11 +777,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
 					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
 					if err != nil {
-						return fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
+						return nil, fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
 					}
 				} else {
 					// TODO: handle properly
-					return fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
+					return nil, fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
 				}
 			}
 		}
@@ -740,7 +797,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				case "StatefulSet":
 					ss, err := clientset.AppsV1().StatefulSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -761,24 +818,24 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				case "ReplicaSet":
 					rs, err := clientset.AppsV1().ReplicaSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
 					}
 
 					if len(rs.OwnerReferences) != 1 {
-						return fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
+						return nil, fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
 					}
 					if rs.OwnerReferences[0].Kind != "Deployment" {
-						return fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
+						return nil, fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
 					}
 
 					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, rs.OwnerReferences[0].Name, metav1.GetOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -799,10 +856,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
-						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				default:
-					return fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
+					return nil, fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
 				}
 			}
 		}
@@ -816,18 +873,18 @@ checkPvcPodLoop:
 		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {
-				return fmt.Errorf("failed to get pods in %s: %w", ns, err)
+				return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
 			}
 			for _, nsPod := range nsPods.Items {
 				for _, podVol := range nsPod.Spec.Volumes {
 					if podVol.PersistentVolumeClaim != nil {
 						for _, nsClaim := range nsPvcs {
-							if podVol.PersistentVolumeClaim.ClaimName == nsClaim.Name {
+							if podVol.PersistentVolumeClaim.ClaimName == nsClaim.claim.Name {
 								if nsPod.CreationTimestamp.After(migrationStartTime) {
-									return fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
+									return nil, fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.claim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
 								}
 
-								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, waiting\n", nsPod.Name, ns, nsClaim.Name)
+								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, waiting\n", nsPod.Name, ns, nsClaim.claim.Name)
 								time.Sleep(checkInterval) // don't check too often, as this loop is relatively expensive
 								continue checkPvcPodLoop  // as soon as we find a matching pod, we know we need to wait another 30s
 							}
@@ -841,7 +898,7 @@ checkPvcPodLoop:
 	}
 
 	w.Printf("All pods removed successfully\n")
-	return nil
+	return updatedPVCs, nil
 }
 
 func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, namespaces []string) error {

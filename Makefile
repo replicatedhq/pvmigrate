@@ -34,11 +34,14 @@ clean:
 
 .PHONY: deps
 deps:
-	go get golang.org/x/lint/golint
+	@if [ -z `which golangci-lint` ]; then \
+		echo "installing golangci-lint";\
+		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin;\
+	fi
 
 .PHONY: lint
 lint: deps
-	golint -set_exit_status ./... ./cmd/...
+	golangci-lint run --timeout=5m ./...
 
 .PHONY: vet
 vet:

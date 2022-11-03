@@ -107,7 +107,7 @@ func checkNodesDiskSpace(ctx context.Context, w *log.Logger, clientset k8sclient
 	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
 	fmt.Fprintf(tw, "\nNode\tFree (bytes)\tLargest PV (bytes)\tPV usage\n")
 	for node, freeb := range free {
-		largestb, _ := largest[node]
+		largestb := largest[node]
 		largestpct := largestb * 100 / freeb
 		_, _ = fmt.Fprintf(tw, "%s\t%d\t%d\t%d%%\n", node, freeb, largestb, largestpct)
 	}

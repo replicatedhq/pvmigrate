@@ -199,16 +199,16 @@ func freeDiskSpacePerNode(ctx context.Context, logger *log.Logger, cli k8sclient
 		pod := buildDiskAvailablePod("default", tmppvc.Name, image, node.Name)
 		podout, status, err := runEphemeralPod(ctx, logger, cli, 30*time.Second, pod)
 		if err != nil {
-			log.Printf("pod log:")
-			log.Printf(string(podout))
+			logger.Print("pod log:")
+			logger.Print(string(podout))
 			logPodConditions(logger, status)
 			return nil, fmt.Errorf("unable to run pod on node %s: %w", node.Name, err)
 		}
 
 		avail, err := parseDiskAvailablePodOutput(podout)
 		if err != nil {
-			log.Printf("pod log:")
-			log.Printf(string(podout))
+			logger.Print("pod log:")
+			logger.Print(string(podout))
 			return nil, fmt.Errorf("unable to parse pod output: %w", err)
 		}
 

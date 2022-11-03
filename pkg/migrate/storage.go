@@ -13,12 +13,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/utils/pointer"
 )
 
 // buildResourceName concats prefix and suffix and trims if longer than 63 chars.
@@ -30,12 +28,14 @@ func buildResourceName(prefix, suffix string) string {
 	return name
 }
 
-// buildDiskAvailablePod returns a pod that mounts the provided pvc under /data and has as its
-// command a "df /data". returned pod will have the provided node as required during scheduling.
-func buildDiskAvailablePod(namespace, pvcName, image, node string) *corev1.Pod {
+// buildDiskAvailablePod returns a pod that mounts the host path /var/openebs and has as its
+// command a "df /var/openbs". returned pod will have the provided node as required during
+// scheduling.
+func buildDiskAvailablePod(namespace, image, node string) *corev1.Pod {
+	typedir := corev1.HostPathDirectory
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      buildResourceName("disk-free", pvcName),
+			Name:      buildResourceName("disk-free", node),
 			Namespace: namespace,
 			Labels: map[string]string{
 				"pvmigrate": "volume-bind",
@@ -64,8 +64,9 @@ func buildDiskAvailablePod(namespace, pvcName, image, node string) *corev1.Pod {
 				{
 					Name: "vol",
 					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: pvcName,
+						HostPath: &corev1.HostPathVolumeSource{
+							Type: &typedir,
+							Path: "/var/openebs",
 						},
 					},
 				},
@@ -92,28 +93,6 @@ func buildDiskAvailablePod(namespace, pvcName, image, node string) *corev1.Pod {
 							corev1.ResourceCPU:    resource.MustParse("10m"),
 						},
 					},
-				},
-			},
-		},
-	}
-}
-
-// buildTempPVC returns a new 1Gi pvc with provided name and using provided storage class name.
-// this temporary pvc is used when evaluating the node available disk size when using openebs.
-func buildTempPVC(pvcname, scname string) *corev1.PersistentVolumeClaim {
-	return &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      pvcname,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			StorageClassName: pointer.String(scname),
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse("1Gi"),
 				},
 			},
 		},
@@ -180,23 +159,7 @@ func freeDiskSpacePerNode(ctx context.Context, logger *log.Logger, cli k8sclient
 
 	result := map[string]int64{}
 	for _, node := range nodes.Items {
-		pvcname := buildResourceName("disk-free", node.Name)
-		tmppvc := buildTempPVC(pvcname, scname)
-
-		_, err := cli.CoreV1().PersistentVolumeClaims("default").Create(ctx, tmppvc, metav1.CreateOptions{})
-		if err != nil && !errors.IsAlreadyExists(err) {
-			return nil, fmt.Errorf("unable to create pvc: %w", err)
-		}
-
-		defer func(name string) {
-			if err := cli.CoreV1().PersistentVolumeClaims("default").Delete(
-				ctx, name, metav1.DeleteOptions{},
-			); err != nil {
-				logger.Printf("unable to delete pvc %s: %s", name, err)
-			}
-		}(pvcname)
-
-		pod := buildDiskAvailablePod("default", tmppvc.Name, image, node.Name)
+		pod := buildDiskAvailablePod("default", image, node.Name)
 		podout, status, err := runEphemeralPod(ctx, logger, cli, 30*time.Second, pod)
 		if err != nil {
 			logger.Print("pod log:")

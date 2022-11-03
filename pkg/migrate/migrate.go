@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -48,6 +49,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
+	SkipFreeSpaceCheck   bool
 }
 
 // Cli uses CLI options to run Migrate
@@ -61,6 +63,7 @@ func Cli() {
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
+	flag.BoolVar(&options.SkipFreeSpaceCheck, "skip-free-space-check", false, "skip checking if enough disk space is available when migrating to OpenEBS")
 
 	flag.Parse()
 
@@ -86,11 +89,89 @@ func Cli() {
 	}
 }
 
+// checkingNodesDiskSpace verifies if we have enough disk space to execute the migration. this
+// function only works when the storage class uses OpenEBS, for other storage classes we attempt
+// to immediate bound the volumes and this function is not necessary.
+func checkNodesDiskSpace(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options Options) error {
+	w.Printf("Analysing used and free disk space per node...")
+	largest, unusedLargest, err := largestPVS(ctx, clientset, options.DestSCName)
+	if err != nil {
+		return fmt.Errorf("error calculating used disk space per node: %w", err)
+	}
+
+	free, err := freeDiskSpacePerNode(ctx, w, clientset, options.DestSCName, options.RsyncImage)
+	if err != nil {
+		return fmt.Errorf("error calculating available disk space per node: %w", err)
+	}
+
+	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
+	fmt.Fprintf(tw, "\nNode\tFree (bytes)\tLargest PV (bytes)\tPV usage\n")
+	for node, freeb := range free {
+		largestb, _ := largest[node]
+		largestpct := largestb * 100 / freeb
+		_, _ = fmt.Fprintf(tw, "%s\t%d\t%d\t%d%%\n", node, freeb, largestb, largestpct)
+	}
+	fmt.Fprintf(tw, "\n")
+	tw.Flush()
+
+	faultyNodes := map[string]bool{}
+	for node, freeb := range free {
+		largestb, ok := largest[node]
+		if !ok {
+			continue
+		}
+		if hasEnoughSpace(freeb, largestb) {
+			continue
+		}
+		faultyNodes[node] = true
+	}
+
+	if unusedLargest != 0 {
+		w.Printf("Largest non attached PV: %d bytes", unusedLargest)
+		for node, freeb := range free {
+			if hasEnoughSpace(freeb, unusedLargest) {
+				continue
+			}
+			faultyNodes[node] = true
+		}
+	}
+
+	if len(faultyNodes) > 0 {
+		var nnames []string
+		for nname := range faultyNodes {
+			nnames = append(nnames, nname)
+		}
+		return fmt.Errorf("Not enough disk space to migrate volumes on nodes: %s", strings.Join(nnames, ","))
+	}
+
+	return nil
+}
+
+// hasEnoughSpace verifies if we can migrate a pv with 'used' bytes of size with the provided
+// free space. this function reservers 15% percent of the space to avoid filling the disk too
+// much for kubernetes' taste.
+func hasEnoughSpace(free, used int64) bool {
+	if free == 0 {
+		return false
+	}
+
+	effectiveFree := float64(free) * 0.85
+	largestpct := 100 * float64(used) / effectiveFree
+	return largestpct < 50
+}
+
 // Migrate moves data and PVCs from one StorageClass to another
 func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options Options) error {
 	err := validateStorageClasses(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.SkipSourceValidation)
 	if err != nil {
 		return err
+	}
+
+	if isDestScLocalVolumeProvisioner && !options.SkipFreeSpaceCheck {
+		if err := checkNodesDiskSpace(ctx, w, clientset, options); err != nil {
+			return err
+		}
+		w.Printf("Enough disk space found in all nodes for the migration, proceeding.")
 	}
 
 	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)

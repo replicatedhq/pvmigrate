@@ -22,12 +22,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
-const baseAnnotation = "kurl.sh/pvcmigrate"
-const scaleAnnotation = baseAnnotation + "-scale"
-const kindAnnotation = baseAnnotation + "-kind"
-const sourceNsAnnotation = baseAnnotation + "-sourcens"
-const sourcePvcAnnotation = baseAnnotation + "-sourcepvc"
-const desiredReclaimAnnotation = baseAnnotation + "-reclaim"
+const (
+	baseAnnotation           = "kurl.sh/pvcmigrate"
+	scaleAnnotation          = baseAnnotation + "-scale"
+	kindAnnotation           = baseAnnotation + "-kind"
+	sourceNsAnnotation       = baseAnnotation + "-sourcens"
+	sourcePvcAnnotation      = baseAnnotation + "-sourcepvc"
+	desiredReclaimAnnotation = baseAnnotation + "-reclaim"
+)
 
 // IsDefaultStorageClassAnnotation - this is also exported by https://github.com/kubernetes/kubernetes/blob/v1.21.3/pkg/apis/storage/v1/util/helpers.go#L25
 // but that would require adding the k8s import overrides to our go.mod
@@ -48,6 +50,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
+	PvcCopyTimeout       int
 }
 
 // Cli uses CLI options to run Migrate
@@ -61,6 +64,7 @@ func Cli() {
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
+	flag.IntVar(&options.PvcCopyTimeout, "timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
 
 	flag.Parse()
 
@@ -98,12 +102,21 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
+	// validate pvc access modes
+	unsupportedPVcs, err := validatePVCs(ctx, w, clientset, matchingPVCs)
+	if err != nil {
+		return err
+	}
+	if unsupportedPVcs != nil {
+		// TODO: format and return error
+	}
+
 	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Second)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Duration(options.PvcCopyTimeout))
 	if err != nil {
 		return err
 	}
@@ -212,7 +225,7 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]pvcCtx, verboseCopy bool, waitTime time.Duration) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]pvcCtx, verboseCopy bool, timeout time.Duration) error {
 	// create a pod for each PVC migration, and wait for it to finish
 	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
 	for ns, nsPvcs := range matchingPVCs {
@@ -220,7 +233,10 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			sourcePvcName, destPvcName := nsPvc.claim.Name, newPvcName(nsPvc.claim.Name)
 			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.claim.Spec.VolumeName, destPvcName, ns)
 
-			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime, nsPvc.getNodeNameRef())
+			// setup timeout
+			timeoutCtx, cancelCtx := context.WithTimeout(ctx, timeout)
+			defer cancelCtx()
+			err := copyOnePVC(timeoutCtx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, nsPvc.getNodeNameRef())
 			if err != nil {
 				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.claim.Name, ns, err)
 			}
@@ -229,7 +245,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration, nodeName string) error {
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, nodeName string) error {
 	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
 	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage, nodeName)
 	if err != nil {
@@ -245,8 +261,10 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		}
 	}()
 
-	// wait for the pod to be created
-	time.Sleep(waitTime)
+	// initial wait for the pod to be created
+	waitInterval := time.Duration(time.Second * 1)
+	time.Sleep(waitInterval)
+
 	for {
 		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 		if err != nil {
@@ -255,7 +273,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		}
 
 		if gotPod.Status.Phase == corev1.PodPending {
-			time.Sleep(waitTime)
+			time.Sleep(waitInterval)
 			continue
 		}
 
@@ -265,6 +283,13 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		}
 
 		w.Printf("got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
+
+		select {
+		case <-ctx.Done():
+			err = getPvcError(ctx, w, clientset, destPvcName, ns)
+			w.Printf("ERROR: Copy operation from PVC %s to PVC %s timed out\n", sourcePvcName, destPvcName)
+			return fmt.Errorf("context deadline exceeded waiting for migration pod %s to go into Running phase: %w", createdPod.Name, err)
+		}
 	}
 
 	w.Printf("migrating PVC %s:\n", sourcePvcName)
@@ -291,8 +316,8 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 				break
 			}
 
-			//if the pod is running, wait to see if getting logs works in a few seconds
-			time.Sleep(waitTime)
+			// if the pod is running, wait to see if getting logs works in a few seconds
+			time.Sleep(waitInterval)
 		}
 	}
 
@@ -340,7 +365,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 			return fmt.Errorf("logs for the migration pod %s in %s ended, but the status was %s and not succeeded", createdPod.Name, ns, gotPod.Status.Phase)
 		}
 
-		time.Sleep(waitTime)
+		time.Sleep(waitInterval)
 	}
 
 	w.Printf("finished migrating PVC %s\n", sourcePvcName)
@@ -348,7 +373,6 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 }
 
 func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string) (*corev1.Pod, error) {
-
 	// apply nodeAffinity when migrating to a local volume provisioner
 	var nodeAffinity *corev1.Affinity
 	if isDestScLocalVolumeProvisioner && nodeName != "" {
@@ -435,7 +459,6 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 	}, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pod to migrate PVC %s to %s in %s: %w", sourcePvcName, destPvcName, ns, err)
-
 	}
 	return createdPod, nil
 }
@@ -709,7 +732,6 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
 // It returns a map of namespace to PVCs and any errors encountered.
 func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]pvcCtx, checkInterval time.Duration) (map[string][]pvcCtx, error) {
-
 	// build new map with complete pvcCtx
 	updatedPVCs := matchingPVCs
 
@@ -808,11 +830,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					ss.Spec.Replicas = &int320
 
 					// add an annotation with the current scale (if it does not already exist)
-					if ss.ObjectMeta.Annotations == nil {
-						ss.ObjectMeta.Annotations = map[string]string{}
+					if ss.Annotations == nil {
+						ss.Annotations = map[string]string{}
 					}
-					if _, ok := ss.ObjectMeta.Annotations[scaleAnnotation]; !ok {
-						ss.ObjectMeta.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
+					if _, ok := ss.Annotations[scaleAnnotation]; !ok {
+						ss.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
 					}
 
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
@@ -846,11 +868,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					dep.Spec.Replicas = &int320
 
 					// add an annotation with the current scale (if it does not already exist)
-					if dep.ObjectMeta.Annotations == nil {
-						dep.ObjectMeta.Annotations = map[string]string{}
+					if dep.Annotations == nil {
+						dep.Annotations = map[string]string{}
 					}
-					if _, ok := dep.ObjectMeta.Annotations[scaleAnnotation]; !ok {
-						dep.ObjectMeta.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
+					if _, ok := dep.Annotations[scaleAnnotation]; !ok {
+						dep.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
 					}
 
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
@@ -910,12 +932,12 @@ func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			return fmt.Errorf("failed to get statefulsets in %s: %w", ns, err)
 		}
 		for _, ss := range sses.Items {
-			if desiredScale, ok := ss.ObjectMeta.Annotations[scaleAnnotation]; ok {
+			if desiredScale, ok := ss.Annotations[scaleAnnotation]; ok {
 				desiredScaleInt, err := strconv.Atoi(desiredScale)
 				if err != nil {
 					return fmt.Errorf("failed to parse scale %q for StatefulSet %s in %s: %w", desiredScale, ss.Name, ns, err)
 				}
-				delete(ss.ObjectMeta.Annotations, scaleAnnotation)
+				delete(ss.Annotations, scaleAnnotation)
 				desiredScaleInt32 := int32(desiredScaleInt)
 				ss.Spec.Replicas = &desiredScaleInt32
 
@@ -934,12 +956,12 @@ func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			return fmt.Errorf("failed to get deployments in %s: %w", ns, err)
 		}
 		for _, dep := range deps.Items {
-			if desiredScale, ok := dep.ObjectMeta.Annotations[scaleAnnotation]; ok {
+			if desiredScale, ok := dep.Annotations[scaleAnnotation]; ok {
 				desiredScaleInt, err := strconv.Atoi(desiredScale)
 				if err != nil {
 					return fmt.Errorf("failed to parse scale %q for Deployment %s in %s: %w", desiredScale, dep.Name, ns, err)
 				}
-				delete(dep.ObjectMeta.Annotations, scaleAnnotation)
+				delete(dep.Annotations, scaleAnnotation)
 				desiredScaleInt32 := int32(desiredScaleInt)
 				dep.Spec.Replicas = &desiredScaleInt32
 
@@ -1145,4 +1167,110 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 	}
 
 	return nil
+}
+
+func validatePVCs(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvcs map[string][]pvcCtx) ([]corev1.PersistentVolumeClaim, error) {
+	var invalidPVclaims []corev1.PersistentVolumeClaim
+
+	for _, pvcCtxs := range pvcs {
+		for _, pvcCtx := range pvcCtxs {
+			validPVC, err := isVolumeAccessModeValid(ctx, l, clientset, *pvcCtx.claim)
+			if err != nil {
+				l.Printf("could not validate access mode of %+q for PVC %s", pvcCtx.claim.Spec.AccessModes, pvcCtx.claim.Name)
+			}
+			if !validPVC {
+				invalidPVclaims = append(invalidPVclaims, *pvcCtx.claim)
+			}
+		}
+	}
+
+	if len(invalidPVclaims) > 0 {
+		return invalidPVclaims, nil
+	}
+	return nil, nil
+}
+
+func isVolumeAccessModeValid(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvc corev1.PersistentVolumeClaim) (bool, error) {
+	pvcConsumerPod := getPvcConsumerPod(pvc)
+	// TODO: Determine if pod was created
+
+	// cleanup pod after completion
+	defer func() {
+		err = clientset.CoreV1().Pods(pvc.Namespace).Delete(context.TODO(), pvcConsumerPod.Name, metav1.DeleteOptions{})
+		if err != nil {
+			l.Printf("failed to delete PVC consumer pod %s: %v", pvcConsumerPod.Name, err)
+		}
+	}()
+
+	return true, nil
+}
+
+func getPvcConsumerPod(pvc corev1.PersistentVolumeClaim) *corev1.Pod {
+	return &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-access-mode-pvc-" + pvc.Name,
+			Namespace: pvc.Namespace,
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Volumes: []corev1.Volume{
+				{
+					Name: *pvc.Spec.StorageClassName + "-volume",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: pvc.Name,
+						},
+					},
+				},
+			},
+			Containers: []corev1.Container{
+				{
+					Name:  "busybox",
+					Image: "busybox",
+					Command: []string{
+						"sleep",
+						"3600",
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							MountPath: "/dest",
+							Name:      *pvc.Spec.StorageClassName + "-volume",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// getPvcError returns the reason for why a PVC is in Pending status
+// returns nil if PVC is not pending
+func getPvcError(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvcName string, namespace string) error {
+	pvc, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to check access mode for PVC %s: %w", pvcName, err)
+	}
+
+	// no need to inspect pvc
+	if pvc.Status.Phase != corev1.ClaimPending {
+		return nil
+	}
+
+	eventSelector := clientset.CoreV1().Events(namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
+	pvcEvents, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
+	if err != nil {
+		return fmt.Errorf("failed to list events for PVC %s", pvcName)
+	}
+
+	// get pending reason
+	for _, event := range pvcEvents.Items {
+		if event.Reason == "ProvisioningFailed" {
+			return fmt.Errorf("PVC %s could not be bound: %s", pvcName, event.Message)
+		}
+	}
+	return fmt.Errorf("Could not determine reason for why PVC %s is in Pending phase", pvcName)
 }

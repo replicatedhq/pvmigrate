@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
+	k8spodutils "k8s.io/kubernetes/pkg/api/v1/pod"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
@@ -103,12 +104,10 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	}
 
 	// validate pvc access modes
-	unsupportedPVcs, err := validatePVCs(ctx, w, clientset, matchingPVCs)
-	if err != nil {
-		return err
-	}
+	unsupportedPVcs := validatePVCs(ctx, w, clientset, matchingPVCs)
 	if unsupportedPVcs != nil {
 		// TODO: format and return error
+		return fmt.Errorf("Some PVCs are not supported for storage class %s", options.DestSCName)
 	}
 
 	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
@@ -157,6 +156,11 @@ func (pvc pvcCtx) getNodeNameRef() string {
 		return ""
 	}
 	return pvc.usedByPod.Spec.NodeName
+}
+
+type pvcValidation struct {
+	valid  bool
+	reason string
 }
 
 // swapDefaultStorageClasses attempts to set newDefaultSC as the default StorageClass
@@ -286,9 +290,10 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 
 		select {
 		case <-ctx.Done():
-			err = getPvcError(ctx, w, clientset, destPvcName, ns)
+			// TODO: revisit this
 			w.Printf("ERROR: Copy operation from PVC %s to PVC %s timed out\n", sourcePvcName, destPvcName)
 			return fmt.Errorf("context deadline exceeded waiting for migration pod %s to go into Running phase: %w", createdPod.Name, err)
+		default:
 		}
 	}
 
@@ -1169,40 +1174,57 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 	return nil
 }
 
-func validatePVCs(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvcs map[string][]pvcCtx) ([]corev1.PersistentVolumeClaim, error) {
-	var invalidPVclaims []corev1.PersistentVolumeClaim
+func validatePVCs(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvcs map[string][]pvcCtx) map[string]map[string]string {
+	validationErrors := make(map[string]map[string]string)
 
-	for _, pvcCtxs := range pvcs {
+	for ns, pvcCtxs := range pvcs {
 		for _, pvcCtx := range pvcCtxs {
-			validPVC, err := isVolumeAccessModeValid(ctx, l, clientset, *pvcCtx.claim)
+			v, err := checkVolumeAccessModeValid(ctx, l, clientset, *pvcCtx.claim)
 			if err != nil {
-				l.Printf("could not validate access mode of %+q for PVC %s", pvcCtx.claim.Spec.AccessModes, pvcCtx.claim.Name)
+				validationErrors[ns] = map[string]string{pvcCtx.claim.Name: fmt.Sprintf("Failed to validate volume access mode: %s", err)}
+				continue
 			}
-			if !validPVC {
-				invalidPVclaims = append(invalidPVclaims, *pvcCtx.claim)
-			}
+			validationErrors[ns] = map[string]string{pvcCtx.claim.Name: v.reason}
 		}
 	}
-
-	if len(invalidPVclaims) > 0 {
-		return invalidPVclaims, nil
-	}
-	return nil, nil
+	return validationErrors
 }
 
-func isVolumeAccessModeValid(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvc corev1.PersistentVolumeClaim) (bool, error) {
-	pvcConsumerPod := getPvcConsumerPod(pvc)
-	// TODO: Determine if pod was created
+func checkVolumeAccessModeValid(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvc corev1.PersistentVolumeClaim) (pvcValidation, error) {
+	pvcConsumerPodSpec := getPvcConsumerPod(pvc)
+	pvcConsumerPod, err := clientset.CoreV1().Pods(pvc.Namespace).Create(ctx, pvcConsumerPodSpec, metav1.CreateOptions{})
+	if err != nil {
+		return pvcValidation{}, err
+	}
 
 	// cleanup pod after completion
 	defer func() {
 		err = clientset.CoreV1().Pods(pvc.Namespace).Delete(context.TODO(), pvcConsumerPod.Name, metav1.DeleteOptions{})
 		if err != nil {
-			l.Printf("failed to delete PVC consumer pod %s: %v", pvcConsumerPod.Name, err)
+			l.Printf("Failed to delete PVC consumer pod %s: %v", pvcConsumerPod.Name, err)
 		}
 	}()
 
-	return true, nil
+	podReadyCh := make(chan bool, 1)
+	go func() {
+		for {
+			if k8spodutils.IsPodReady(pvcConsumerPod) {
+				podReadyCh <- true
+			}
+		}
+	}()
+	select {
+	case <-podReadyCh:
+	case <-time.After(time.Second * 10):
+		// check pvc status and get error
+		pvcPendingError, err := getPvcError(ctx, l, clientset, pvc)
+		if err != nil {
+			return pvcValidation{false, fmt.Sprintf("Failed to get PVC error: %s", err)}, nil
+		}
+		return pvcValidation{false, fmt.Sprintf("PVC Error: %s", pvcPendingError)}, nil
+	}
+
+	return pvcValidation{true, ""}, nil
 }
 
 func getPvcConsumerPod(pvc corev1.PersistentVolumeClaim) *corev1.Pod {
@@ -1249,28 +1271,23 @@ func getPvcConsumerPod(pvc corev1.PersistentVolumeClaim) *corev1.Pod {
 
 // getPvcError returns the reason for why a PVC is in Pending status
 // returns nil if PVC is not pending
-func getPvcError(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvcName string, namespace string) error {
-	pvc, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to check access mode for PVC %s: %w", pvcName, err)
-	}
-
+func getPvcError(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvc corev1.PersistentVolumeClaim) (error, error) {
 	// no need to inspect pvc
 	if pvc.Status.Phase != corev1.ClaimPending {
-		return nil
+		return nil, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
 	}
 
-	eventSelector := clientset.CoreV1().Events(namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
-	pvcEvents, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
+	eventSelector := clientset.CoreV1().Events(pvc.Namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
+	pvcEvents, err := clientset.CoreV1().Events(pvc.Namespace).List(ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
 	if err != nil {
-		return fmt.Errorf("failed to list events for PVC %s", pvcName)
+		return nil, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
 	}
 
 	// get pending reason
 	for _, event := range pvcEvents.Items {
 		if event.Reason == "ProvisioningFailed" {
-			return fmt.Errorf("PVC %s could not be bound: %s", pvcName, event.Message)
+			return errors.New(event.Message), nil
 		}
 	}
-	return fmt.Errorf("Could not determine reason for why PVC %s is in Pending phase", pvcName)
+	return nil, fmt.Errorf("Could not determine reason for why PVC %s is in Pending phase", pvc.Name)
 }

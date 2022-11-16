@@ -13,12 +13,15 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
+	kurlutils "github.com/replicatedhq/kurl/pkg/k8sutil"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	k8spodutils "k8s.io/kubernetes/pkg/api/v1/pod"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
@@ -52,6 +55,16 @@ type Options struct {
 	VerboseCopy          bool
 	SkipSourceValidation bool
 	PvcCopyTimeout       int
+}
+
+type PVMigrator struct {
+	ctx             context.Context
+	log             *log.Logger
+	k8scli          k8sclient.Interface
+	srcSc           string
+	dstSc           string
+	deletePVTimeout time.Duration
+	podTimeout      time.Duration
 }
 
 // Cli uses CLI options to run Migrate
@@ -103,11 +116,19 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	// validate pvc access modes
-	unsupportedPVcs := validatePVCs(ctx, w, clientset, matchingPVCs)
-	if unsupportedPVcs != nil {
-		// TODO: format and return error
-		return fmt.Errorf("Some PVCs are not supported for storage class %s", options.DestSCName)
+	srcPVs, err := kurlutils.PVSByStorageClass(ctx, clientset, options.SourceSCName)
+	if err != nil {
+		return fmt.Errorf("failed to get volumes using storage class %s: %w", options.SourceSCName, err)
+	}
+	pvMigrator := PVMigrator{ctx, w, clientset, options.SourceSCName, options.DestSCName, 5 * time.Minute, 10 * time.Second}
+	unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
+	if err != nil {
+		return fmt.Errorf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
+	}
+
+	if unsupportedPVCs != nil {
+		// TODO: print error
+		return fmt.Errorf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
 	}
 
 	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
@@ -158,9 +179,14 @@ func (pvc pvcCtx) getNodeNameRef() string {
 	return pvc.usedByPod.Spec.NodeName
 }
 
-type pvcValidation struct {
-	valid  bool
-	reason string
+type pvcError struct {
+	reason  string
+	from    string
+	message string
+}
+
+func (e *pvcError) Error() string {
+	return fmt.Sprintf("volume claim error from %s during %s: %s", e.from, e.reason, e.message)
 }
 
 // swapDefaultStorageClasses attempts to set newDefaultSC as the default StorageClass
@@ -1174,77 +1200,119 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 	return nil
 }
 
-func validatePVCs(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvcs map[string][]pvcCtx) map[string]map[string]string {
+// ValidateVolumeAccessModes checks whether the provided persistent volumes support the access modes
+// of a given storage class.
+// returns a map of pvc errors indexed by namespace
+func (pvm *PVMigrator) ValidateVolumeAccessModes(pvs map[string]corev1.PersistentVolume) (map[string]map[string]string, error) {
 	validationErrors := make(map[string]map[string]string)
 
-	for ns, pvcCtxs := range pvcs {
-		for _, pvcCtx := range pvcCtxs {
-			v, err := checkVolumeAccessModeValid(ctx, l, clientset, *pvcCtx.claim)
-			if err != nil {
-				validationErrors[ns] = map[string]string{pvcCtx.claim.Name: fmt.Sprintf("Failed to validate volume access mode: %s", err)}
-				continue
-			}
-			validationErrors[ns] = map[string]string{pvcCtx.claim.Name: v.reason}
-		}
+	if _, err := pvm.k8scli.StorageV1().StorageClasses().Get(pvm.ctx, pvm.dstSc, metav1.GetOptions{}); err != nil {
+		return nil, fmt.Errorf("failed to get destination storage class %s: %w", pvm.dstSc, err)
 	}
-	return validationErrors
-}
 
-func checkVolumeAccessModeValid(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvc corev1.PersistentVolumeClaim) (pvcValidation, error) {
-	pvcConsumerPodSpec := getPvcConsumerPod(pvc)
-	pvcConsumerPod, err := clientset.CoreV1().Pods(pvc.Namespace).Create(ctx, pvcConsumerPodSpec, metav1.CreateOptions{})
+	pvcs, err := kurlutils.PVCSForPVs(pvm.ctx, pvm.k8scli, pvs)
 	if err != nil {
-		return pvcValidation{}, err
+		return nil, fmt.Errorf("failed to get pv to pvc mapping: %w", err)
 	}
 
-	// cleanup pod after completion
-	defer func() {
-		err = clientset.CoreV1().Pods(pvc.Namespace).Delete(context.TODO(), pvcConsumerPod.Name, metav1.DeleteOptions{})
+	for pv, pvc := range pvcs {
+		v, err := pvm.checkVolumeAccessModes(pvc)
 		if err != nil {
-			l.Printf("Failed to delete PVC consumer pod %s: %v", pvcConsumerPod.Name, err)
+			pvm.log.Printf("failed to validate volume access mode for claim %s (%s): %s", pvc.Name, pv, err)
+			continue
 		}
-	}()
-
-	podReadyCh := make(chan bool, 1)
-	go func() {
-		for {
-			if k8spodutils.IsPodReady(pvcConsumerPod) {
-				podReadyCh <- true
-			}
-		}
-	}()
-	select {
-	case <-podReadyCh:
-	case <-time.After(time.Second * 10):
-		// check pvc status and get error
-		pvcPendingError, err := getPvcError(ctx, l, clientset, pvc)
-		if err != nil {
-			return pvcValidation{false, fmt.Sprintf("Failed to get PVC error: %s", err)}, nil
-		}
-		return pvcValidation{false, fmt.Sprintf("PVC Error: %s", pvcPendingError)}, nil
+		validationErrors[pvc.Namespace] = map[string]string{pvc.Name: v.reason}
 	}
-
-	return pvcValidation{true, ""}, nil
+	return validationErrors, nil
 }
 
-func getPvcConsumerPod(pvc corev1.PersistentVolumeClaim) *corev1.Pod {
+// checkVolumeAccessModeValid checks if the access modes of pvc are supported by storage class sc.
+func (pvm *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (pvcError, error) {
+	var err error
+
+	// create temp pvc for storage class
+	tmpPVC := buildTmpPVC(pvc, pvm.dstSc)
+	if tmpPVC, err = pvm.k8scli.CoreV1().PersistentVolumeClaims("default").Create(
+		pvm.ctx, tmpPVC, metav1.CreateOptions{},
+	); err != nil {
+		return pvcError{}, fmt.Errorf("failed to create temporary pvc: %w", err)
+	}
+
+	// consume pvc to determine any access mode errors
+	pvConsumerPodSpec := buildPVConsumerPod(pvc.Name)
+	pvConsumerPod, err := pvm.k8scli.CoreV1().Pods(pvc.Namespace).Create(pvm.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
+	if err != nil {
+		return pvcError{}, err
+	}
+
+	// cleanup pvc and pod at the end
+	defer func() {
+		if err = pvm.deleteTmpPVC(tmpPVC); err != nil {
+			pvm.log.Printf("failed to delete tmp claim: %s", err)
+		}
+	}()
+	defer func() {
+		if err = pvm.deletePVConsumerPod(pvConsumerPod); err != nil {
+			pvm.log.Printf("failed to delete pv consumer pod %s: %s", pvConsumerPod.Name, err)
+		}
+	}()
+
+	podReadyTimeoutEnd := time.Now().Add(pvm.podTimeout)
+	for {
+		gotPod, err := pvm.k8scli.CoreV1().Pods(pvConsumerPod.Namespace).Get(pvm.ctx, pvConsumerPod.Name, metav1.GetOptions{})
+		if err != nil {
+			return pvcError{}, fmt.Errorf("failed getting pv consumer pod %s: %w", gotPod.Name, err)
+		}
+
+		switch {
+		case k8spodutils.IsPodReady(gotPod):
+			return pvcError{}, nil
+		default:
+			time.Sleep(time.Second)
+		}
+
+		if time.Now().After(podReadyTimeoutEnd) {
+			// The volume consumer pod never went into running phase which means it's probably an error
+			// with provisioning the volume.
+			// A pod in Pending phase means the API Server has created the resource and stored it in etcd,
+			// but the pod has not been scheduled yet, nor have container images been pulled from the registry.
+			if gotPod.Status.Phase == corev1.PodPending {
+				// check pvc status and get error
+				pvcPendingError, err := pvm.getPvcError(tmpPVC)
+				if err != nil {
+					return pvcError{}, fmt.Errorf("failed to get PVC error: %s", err)
+				}
+				return pvcPendingError, nil
+			}
+			// pod failed for other reason(s)
+			return pvcError{}, fmt.Errorf("unexpected status for pod %s: %s", gotPod.Name, gotPod.Status.Phase)
+		}
+	}
+}
+
+func buildPVConsumerPod(pvcName string) *corev1.Pod {
+	tmp := uuid.New().String()[:5]
+	podName := fmt.Sprintf("pv-access-modes-checker-%s-%s", pvcName, tmp)
+	if len(podName) > 63 {
+		podName = podName[0:31] + podName[len(podName)-32:]
+	}
 	return &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-access-mode-pvc-" + pvc.Name,
-			Namespace: pvc.Namespace,
+			Name:      podName,
+			Namespace: "default",
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Volumes: []corev1.Volume{
 				{
-					Name: *pvc.Spec.StorageClassName + "-volume",
+					Name: "tmp",
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: pvc.Name,
+							ClaimName: pvcName,
 						},
 					},
 				},
@@ -1259,8 +1327,8 @@ func getPvcConsumerPod(pvc corev1.PersistentVolumeClaim) *corev1.Pod {
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
-							MountPath: "/dest",
-							Name:      *pvc.Spec.StorageClassName + "-volume",
+							MountPath: "/tmpmount",
+							Name:      "tmp",
 						},
 					},
 				},
@@ -1269,25 +1337,149 @@ func getPvcConsumerPod(pvc corev1.PersistentVolumeClaim) *corev1.Pod {
 	}
 }
 
-// getPvcError returns the reason for why a PVC is in Pending status
-// returns nil if PVC is not pending
-func getPvcError(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, pvc corev1.PersistentVolumeClaim) (error, error) {
-	// no need to inspect pvc
-	if pvc.Status.Phase != corev1.ClaimPending {
-		return nil, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
+// buildPVC creates a temporary PVC requesting for 1Mi of storage for a provided storage class name.
+func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
+	tmp := uuid.New().String()[:5]
+	pvcName := fmt.Sprintf("pvmigrate-%s-accessmode-test-%s", sc, tmp)
+	if len(pvcName) > 63 {
+		pvcName = pvcName[0:31] + pvcName[len(pvcName)-32:]
 	}
 
-	eventSelector := clientset.CoreV1().Events(pvc.Namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
-	pvcEvents, err := clientset.CoreV1().Events(pvc.Namespace).List(ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pvcName,
+			Namespace: "default",
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: &sc,
+			AccessModes:      pvc.Spec.AccessModes,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("1Mi"),
+				},
+			},
+		},
+	}
+}
+
+// deleteTmpPVC deletes the provided pvc from the default namespace and waits until the
+// backing pv dissapear as well (this is mandatory so we don't leave any orphan pv as this would
+// make the pvmigrate to fail). this function has a timeout of 5 minutes, after that an error is
+// returned.
+func (pvm *PVMigrator) deleteTmpPVC(pvc *corev1.PersistentVolumeClaim) error {
+	// Cleanup should use background context so as not to fail if context has already been canceled
+	ctx := context.Background()
+
+	pvs, err := pvm.k8scli.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
+		return fmt.Errorf("failed to list persistent volumes: %w", err)
+	}
+
+	pvsByPVCName := map[string]corev1.PersistentVolume{}
+	for _, pv := range pvs.Items {
+		if pv.Spec.ClaimRef == nil {
+			continue
+		}
+		pvsByPVCName[pv.Spec.ClaimRef.Name] = pv
+	}
+
+	var waitFor []string
+	propagation := metav1.DeletePropagationForeground
+	delopts := metav1.DeleteOptions{PropagationPolicy: &propagation}
+	if err := pvm.k8scli.CoreV1().PersistentVolumeClaims("default").Delete(
+		ctx, pvc.Name, delopts,
+	); err != nil {
+		log.Printf("failed to delete temp pvc %s: %s", pvc.Name, err)
+	}
+	waitFor = append(waitFor, pvc.Name)
+
+	timeout := time.NewTicker(5 * time.Minute)
+	interval := time.NewTicker(5 * time.Second)
+	defer timeout.Stop()
+	defer interval.Stop()
+	for _, pvc := range waitFor {
+		pv, ok := pvsByPVCName[pvc]
+		if !ok {
+			log.Printf("failed to find pv for temp pvc %s", pvc)
+			continue
+		}
+
+		for {
+			// break the loop as soon as we can't find the pv anymore.
+			if _, err := pvm.k8scli.CoreV1().PersistentVolumes().Get(
+				ctx, pv.Name, metav1.GetOptions{},
+			); err != nil && !k8serrors.IsNotFound(err) {
+				log.Printf("failed to get pv for temp pvc %s: %s", pvc, err)
+			} else if err != nil && k8serrors.IsNotFound(err) {
+				break
+			}
+
+			select {
+			case <-interval.C:
+				continue
+			case <-timeout.C:
+				return fmt.Errorf("failed to delete pvs: timeout")
+			}
+		}
+	}
+	return nil
+}
+
+func (pvm *PVMigrator) deletePVConsumerPod(pod *corev1.Pod) error {
+	propagation := metav1.DeletePropagationForeground
+	delopts := metav1.DeleteOptions{PropagationPolicy: &propagation}
+	if err := pvm.k8scli.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, delopts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// getPvcError returns the reason for why a PVC is in Pending status
+// returns nil if PVC is not pending
+func (pvm *PVMigrator) getPvcError(pvc *corev1.PersistentVolumeClaim) (pvcError, error) {
+	// no need to inspect pvc
+	if pvc.Status.Phase != corev1.ClaimPending {
+		return pvcError{}, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
+	}
+
+	eventSelector := pvm.k8scli.CoreV1().Events(pvc.Namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
+	pvcEvents, err := pvm.k8scli.CoreV1().Events(pvc.Namespace).List(pvm.ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
+	if err != nil {
+		return pvcError{}, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
 	}
 
 	// get pending reason
 	for _, event := range pvcEvents.Items {
 		if event.Reason == "ProvisioningFailed" {
-			return errors.New(event.Message), nil
+			return pvcError{event.Reason, event.Source.Component, event.Type}, nil
 		}
 	}
-	return nil, fmt.Errorf("Could not determine reason for why PVC %s is in Pending phase", pvc.Name)
+	return pvcError{}, fmt.Errorf("Could not determine reason for why PVC %s is in Pending status", pvc.Name)
+}
+
+func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string) (*PVMigrator, error) {
+	k8scli, err := k8sclient.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+
+	if srcSC == "" {
+		return nil, fmt.Errorf("empty source storage class")
+	}
+	if dstSC == "" {
+		return nil, fmt.Errorf("empty destination storage class")
+	}
+	if log == nil {
+		return nil, fmt.Errorf("no logger provided")
+	}
+
+	return &PVMigrator{
+		ctx:             context.Background(),
+		log:             log,
+		k8scli:          k8scli,
+		srcSc:           srcSC,
+		dstSc:           dstSC,
+		deletePVTimeout: 5 * time.Minute,
+		podTimeout:      10 * time.Second,
+	}, nil
 }

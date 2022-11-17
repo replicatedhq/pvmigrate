@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/pointer"
 )
 
@@ -920,6 +922,34 @@ func TestGetPVCs(t *testing.T) {
 			req.Equal(test.originalPVCs, originalPVCs)
 			req.Equal(test.namespaces, nses)
 		})
+	}
+}
+
+func TestNewPVMigrator(t *testing.T) {
+	// test empty logger
+	_, err := NewPVMigrator(&rest.Config{}, nil, "src", "dst")
+	if err == nil || err.Error() != "no logger provided" {
+		t.Errorf("expected failure creating object: %v", err)
+	}
+
+	logger := log.New(io.Discard, "", 0)
+
+	// test src storage class
+	_, err = NewPVMigrator(&rest.Config{}, logger, "", "dst")
+	if err == nil || err.Error() != "empty source storage class" {
+		t.Errorf("expected failure creating object: %v", err)
+	}
+
+	// test empty dst sc
+	_, err = NewPVMigrator(&rest.Config{}, logger, "src", "")
+	if err == nil || err.Error() != "empty destination storage class" {
+		t.Errorf("expected failure creating object: %v", err)
+	}
+
+	// happy path
+	_, err = NewPVMigrator(&rest.Config{}, logger, "src", "dst")
+	if err != nil {
+		t.Errorf("unexpected failure creating object: %v", err)
 	}
 }
 
@@ -3126,7 +3156,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 			},
 		},
 		{
-			name: "error",
+			name: "should fail when there is no matching pvc for a pv",
 			input: map[string]corev1.PersistentVolume{
 				"pv0": {
 					ObjectMeta: metav1.ObjectMeta{
@@ -3134,17 +3164,15 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						StorageClassName: "srcSc",
-						ClaimRef: &corev1.ObjectReference{
-							Name: "pvc",
+						ClaimRef: &corev1.ObjectReference{ // this pvc will not be found
+							Name:      "pvc",
+							Namespace: "default",
 						},
 					},
 				},
 			},
-			expected: map[string]map[string]pvcError{
-				"default": {
-					"pvc": pvcError{},
-				},
-			},
+			expected:        nil,
+			wantErr:         true,
 			srcStorageClass: "srcSc",
 			dstStorageClass: "dstSc",
 			resources: []runtime.Object{
@@ -3157,12 +3185,12 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "dstSc",
 					},
-					Provisioner: "kubernetes.io/no-provisioner",
+					Provisioner:       "kubernetes.io/no-provisioner",
 					VolumeBindingMode: (*storagev1.VolumeBindingMode)(pointer.String("WaitForFirstConsumer")),
 				},
 				&corev1.PersistentVolumeClaim{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "pvc",
+						Name:      "pvc",
 						Namespace: "ns1",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
@@ -3182,9 +3210,37 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 					Spec: corev1.PersistentVolumeSpec{
 						StorageClassName: "srcSc",
 						ClaimRef: &corev1.ObjectReference{
-							Name: "pvc",
+							Name:      "pvc",
 							Namespace: "ns1",
 						},
+					},
+				},
+			},
+		},
+		{
+			name: "should fail when destination storage class is not found",
+			input: map[string]corev1.PersistentVolume{
+				"pv0": {
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv0",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "srcSc",
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc",
+							Namespace: "default",
+						},
+					},
+				},
+			},
+			expected:        nil,
+			wantErr:         true,
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
 					},
 				},
 			},
@@ -3212,6 +3268,299 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 				}
 			}
 			req.Equal(result, tt.expected)
+		})
+	}
+}
+
+func Test_getPvcError(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		srcStorageClass string
+		dstStorageClass string
+		deletePVTimeout time.Duration
+		podTimeout      time.Duration
+		wantErr         bool
+		resources       []runtime.Object
+		input           *corev1.PersistentVolumeClaim
+		expected        pvcError
+	}{
+		{
+			name: "get pvc error from events",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+					UID:       "12345",
+				},
+				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+			},
+			expected: pvcError{
+				reason:  "ProvisioningFailed",
+				from:    "kubernetes.io/no-provisioner",
+				message: "Only support ReadWriteOnce access mode",
+			},
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dstSc",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc",
+						Namespace: "default",
+						UID:       "12345",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+				},
+				&corev1.EventList{
+					Items: []corev1.Event{
+						{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "pvc-error-event",
+								Namespace: "default",
+							},
+							InvolvedObject: corev1.ObjectReference{
+								Kind:      "PersistentVolumeClaim",
+								Namespace: "default",
+								Name:      "pvc",
+								UID:       "12345",
+							},
+							Source:  corev1.EventSource{Component: "kubernetes.io/no-provisioner"},
+							Reason:  "ProvisioningFailed",
+							Message: "Only support ReadWriteOnce access mode",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "no events that match the reason ProvisioningFailed",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+					UID:       "12345",
+				},
+				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+			},
+			expected:        pvcError{},
+			wantErr:         true,
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dstSc",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc",
+						Namespace: "default",
+						UID:       "12345",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+				},
+				&corev1.EventList{
+					Items: []corev1.Event{
+						{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "pvc-error-event",
+								Namespace: "default",
+							},
+							InvolvedObject: corev1.ObjectReference{
+								Kind:      "PersistentVolumeClaim",
+								Namespace: "default",
+								Name:      "pvc",
+								UID:       "12345",
+							},
+							Source:  corev1.EventSource{Component: "kubernetes.io/no-provisioner"},
+							Reason:  "Provisioning",
+							Message: "External provisioner is provisiong volume for claim pvc",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "no events for pvc",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+					UID:       "12345",
+				},
+				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+			},
+			expected:        pvcError{},
+			wantErr:         true,
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dstSc",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc",
+						Namespace: "default",
+						UID:       "12345",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+				},
+			},
+		},
+		{
+			name: "pvc is not in Pending status",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+					UID:       "12345",
+				},
+				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+			},
+			expected:        pvcError{},
+			wantErr:         true,
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources:       []runtime.Object{},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			kcli := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			pvm := PVMigrator{
+				ctx:             context.Background(),
+				log:             testlog,
+				k8scli:          kcli,
+				srcSc:           tt.srcStorageClass,
+				dstSc:           tt.dstStorageClass,
+				deletePVTimeout: 1 * time.Millisecond,
+				podTimeout:      1 * time.Millisecond,
+			}
+			result, err := pvm.getPvcError(tt.input)
+			if err != nil {
+				if tt.wantErr {
+					req.Error(err)
+				} else {
+					req.NoError(err)
+				}
+			}
+			req.Equal(tt.expected, result)
+		})
+	}
+}
+
+func Test_checkVolumeAccessModes(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		srcStorageClass string
+		dstStorageClass string
+		deletePVTimeout time.Duration
+		podTimeout      time.Duration
+		wantErr         bool
+		resources       []runtime.Object
+		input           *corev1.PersistentVolumeClaim
+		expected        pvcError
+	}{
+		{
+			name: "access mode not supported",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+					UID:       "12345",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("srcSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+			},
+			expected: pvcError{
+				reason:  "ProvisioningFailed",
+				from:    "kubernetes.io/no-provisioner",
+				message: "Only support ReadWriteOnce access mode",
+			},
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dstSc",
+					},
+				},
+				&corev1.EventList{
+					Items: []corev1.Event{
+						{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "pvc-error-event",
+								Namespace: "default",
+							},
+							InvolvedObject: corev1.ObjectReference{
+								Kind:      "PersistentVolumeClaim",
+								Namespace: "default",
+								UID:       "12345",
+							},
+							Source:  corev1.EventSource{Component: "kubernetes.io/no-provisioner"},
+							Reason:  "ProvisioningFailed",
+							Message: "Only support ReadWriteOnce access mode",
+						},
+					},
+				},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			kcli := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			pvm := PVMigrator{
+				ctx:             context.Background(),
+				log:             testlog,
+				k8scli:          kcli,
+				srcSc:           tt.srcStorageClass,
+				dstSc:           tt.dstStorageClass,
+				deletePVTimeout: 1 * time.Millisecond,
+				podTimeout:      1 * time.Millisecond,
+			}
+			result, err := pvm.getPvcError(tt.input)
+			if err != nil {
+				if tt.wantErr {
+					req.Error(err)
+				} else {
+					req.NoError(err)
+				}
+			}
+			req.Equal(tt.expected, result)
+			req.Fail("failing")
 		})
 	}
 }

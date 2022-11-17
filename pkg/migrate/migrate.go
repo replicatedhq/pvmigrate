@@ -1269,7 +1269,7 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 // buildPVConsumerPod creates a pod spec for consuming a pvc
 func buildPVConsumerPod(pvcName string) *corev1.Pod {
 	tmp := uuid.New().String()[:5]
-	podName := fmt.Sprintf("pv-access-modes-checker-%s-%s", pvcName, tmp)
+	podName := fmt.Sprintf("pv-access-modes-checker-for-%s-%s", pvcName, tmp)
 	if len(podName) > 63 {
 		podName = podName[0:31] + podName[len(podName)-32:]
 	}
@@ -1317,7 +1317,7 @@ func buildPVConsumerPod(pvcName string) *corev1.Pod {
 // buildPVC creates a temporary PVC requesting for 1Mi of storage for a provided storage class name.
 func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
 	tmp := uuid.New().String()[:5]
-	pvcName := fmt.Sprintf("pvmigrate-%s-accessmode-test-%s", sc, tmp)
+	pvcName := fmt.Sprintf("pvmigrate-%s-accessmode-test-claim-%s", pvc.Name, tmp)
 	if len(pvcName) > 63 {
 		pvcName = pvcName[0:31] + pvcName[len(pvcName)-32:]
 	}
@@ -1326,6 +1326,7 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName,
 			Namespace: "default",
+			UID:       pvc.UID, // for testing
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
@@ -1336,6 +1337,8 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 				},
 			},
 		},
+		// for testing
+		Status: corev1.PersistentVolumeClaimStatus{Phase: pvc.Status.Phase},
 	}
 }
 
@@ -1354,7 +1357,7 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (p
 
 	// consume pvc to determine any access mode errors
 	pvConsumerPodSpec := buildPVConsumerPod(pvc.Name)
-	pvConsumerPod, err := p.k8scli.CoreV1().Pods(pvc.Namespace).Create(p.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
+	pvConsumerPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Create(p.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
 	if err != nil {
 		return pvcError{}, err
 	}
@@ -1431,7 +1434,10 @@ func (p *PVMigrator) deleteTmpPVC(pvc *corev1.PersistentVolumeClaim) error {
 	if err := p.k8scli.CoreV1().PersistentVolumeClaims("default").Delete(
 		ctx, pvc.Name, delopts,
 	); err != nil {
-		log.Printf("failed to delete temp pvc %s: %s", pvc.Name, err)
+		if !k8serrors.IsNotFound(err) {
+			log.Printf("failed to delete temp pvc %s: %s", pvc.Name, err)
+			return err
+		}
 	}
 	waitFor = append(waitFor, pvc.Name)
 
@@ -1493,7 +1499,7 @@ func (p *PVMigrator) getPvcError(pvc *corev1.PersistentVolumeClaim) (pvcError, e
 	// get pending reason
 	for _, event := range pvcEvents.Items {
 		if event.Reason == "ProvisioningFailed" {
-			return pvcError{event.Reason, event.Source.Component, event.Type}, nil
+			return pvcError{event.Reason, event.Source.Component, event.Message}, nil
 		}
 	}
 	return pvcError{}, fmt.Errorf("Could not determine reason for why PVC %s is in Pending status", pvc.Name)

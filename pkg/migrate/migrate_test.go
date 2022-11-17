@@ -349,7 +349,6 @@ func TestValidateStorageClasses(t *testing.T) {
 			} else {
 				req.Error(err)
 			}
-
 		})
 	}
 }
@@ -782,7 +781,6 @@ func TestGetPVCs(t *testing.T) {
 				require.NoError(t, err)
 				require.Equalf(t, dscString, *pvc2.Spec.StorageClassName, "storage class name was %q not dsc", *pvc2.Spec.StorageClassName)
 				require.Equalf(t, "1Gi", pvc2.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc2.Spec.Resources.Requests.Storage().String())
-
 			},
 			originalPVCs: map[string][]pvcCtx{
 				"ns1": {
@@ -884,7 +882,6 @@ func TestGetPVCs(t *testing.T) {
 				pvc2, err := clientset.CoreV1().PersistentVolumeClaims("ns2").Get(context.TODO(), "pvc2", metav1.GetOptions{})
 				require.NoError(t, err)
 				require.Equalf(t, "sc1", *pvc2.Spec.StorageClassName, "storage class name was %q not sc1", *pvc2.Spec.StorageClassName)
-
 			},
 			originalPVCs: map[string][]pvcCtx{
 				"ns1": {
@@ -3058,13 +3055,163 @@ func Test_copyAllPVCs(t *testing.T) {
 				}
 			}(testCtx, testlog, clientset, tt.events)
 
-			err := copyAllPVCs(testCtx, testlog, clientset, "sourcesc", "destsc", "testrsyncimage", tt.matchingPVCs, false, time.Millisecond*10)
+			err := copyAllPVCs(testCtx, testlog, clientset, "sourcesc", "destsc", "testrsyncimage", tt.matchingPVCs, false, time.Second*4)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("got expected error %q", err.Error())
 				return
 			}
 			req.NoError(err)
+		})
+	}
+}
+
+func Test_validateVolumeAccessModes(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		srcStorageClass string
+		dstStorageClass string
+		deletePVTimeout time.Duration
+		podTimeout      time.Duration
+		wantErr         bool
+		resources       []runtime.Object
+		input           map[string]corev1.PersistentVolume
+		expected        map[string]map[string]pvcError
+	}{
+		{
+			name: "no errors",
+			input: map[string]corev1.PersistentVolume{
+				"pv0": {
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv0",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "srcSc",
+						ClaimRef: &corev1.ObjectReference{
+							Name: "pvc",
+						},
+					},
+				},
+			},
+			expected:        nil,
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dstSc",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvc",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv0",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "srcSc",
+						ClaimRef: &corev1.ObjectReference{
+							Name: "pvc",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "error",
+			input: map[string]corev1.PersistentVolume{
+				"pv0": {
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv0",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "srcSc",
+						ClaimRef: &corev1.ObjectReference{
+							Name: "pvc",
+						},
+					},
+				},
+			},
+			expected: map[string]map[string]pvcError{
+				"default": {
+					"pvc": pvcError{},
+				},
+			},
+			srcStorageClass: "srcSc",
+			dstStorageClass: "dstSc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "srcSc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dstSc",
+					},
+					Provisioner: "kubernetes.io/no-provisioner",
+					VolumeBindingMode: (*storagev1.VolumeBindingMode)(pointer.String("WaitForFirstConsumer")),
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: pointer.String("srcSc"),
+						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteAll"},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Mi"),
+							},
+						},
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv0",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "srcSc",
+						ClaimRef: &corev1.ObjectReference{
+							Name: "pvc",
+							Namespace: "ns1",
+						},
+					},
+				},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			kcli := fake.NewSimpleClientset(tt.resources...)
+			testlog := log.New(testWriter{t: t}, "", 0)
+			pvm := PVMigrator{
+				ctx:             context.Background(),
+				log:             testlog,
+				k8scli:          kcli,
+				srcSc:           tt.srcStorageClass,
+				dstSc:           tt.dstStorageClass,
+				deletePVTimeout: 1 * time.Millisecond,
+				podTimeout:      1 * time.Millisecond,
+			}
+			result, err := pvm.ValidateVolumeAccessModes(tt.input)
+			if err != nil {
+				if tt.wantErr {
+					req.Error(err)
+				} else {
+					req.NoError(err)
+				}
+			}
+			req.Equal(result, tt.expected)
 		})
 	}
 }

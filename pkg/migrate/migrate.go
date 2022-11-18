@@ -1339,32 +1339,11 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 		pvcName = pvcName[0:31] + pvcName[len(pvcName)-32:]
 	}
 
-	// for testing purpose, this returns a pvc that is Pending to emulate a failure
-	if pvc.Status.Phase == corev1.ClaimPending {
-		return &corev1.PersistentVolumeClaim{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      pvcName,
-				Namespace: "default",
-				UID:       pvc.UID, // for testing
-			},
-			Spec: corev1.PersistentVolumeClaimSpec{
-				StorageClassName: &sc,
-				AccessModes:      pvc.Spec.AccessModes,
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceStorage: resource.MustParse("1Mi"),
-					},
-				},
-			},
-			// for testing
-			Status: corev1.PersistentVolumeClaimStatus{Phase: pvc.Status.Phase},
-		}
-	}
-
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName,
 			Namespace: "default",
+			UID:       pvc.UID, // for testing
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
@@ -1375,6 +1354,8 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 				},
 			},
 		},
+		// for testing
+		Status: corev1.PersistentVolumeClaimStatus{Phase: pvc.Status.Phase},
 	}
 }
 
@@ -1540,5 +1521,5 @@ func (p *PVMigrator) getPvcError(pvc *corev1.PersistentVolumeClaim) (PVCError, e
 			return PVCError{event.Reason, event.Source.Component, event.Message}, nil
 		}
 	}
-	return PVCError{}, fmt.Errorf("Could not determine reason for why PVC %s is in Pending status", pvc.Name)
+	return PVCError{}, fmt.Errorf("could not determine reason for why PVC %s is in Pending status", pvc.Name)
 }

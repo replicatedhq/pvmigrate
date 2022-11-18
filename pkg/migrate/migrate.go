@@ -47,14 +47,15 @@ var isDestScLocalVolumeProvisioner bool
 
 // Options is the set of options that should be provided to Migrate
 type Options struct {
-	SourceSCName         string
-	DestSCName           string
-	RsyncImage           string
-	Namespace            string
-	SetDefaults          bool
-	VerboseCopy          bool
-	SkipSourceValidation bool
-	PvcCopyTimeout       int
+	SourceSCName               string
+	DestSCName                 string
+	RsyncImage                 string
+	Namespace                  string
+	SetDefaults                bool
+	VerboseCopy                bool
+	SkipSourceValidation       bool
+	SkipPVAccessModeValidation bool
+	PvcCopyTimeout             int
 }
 
 // PVMigrator represents a migration context for migrating data from all srcSC volumes to
@@ -81,6 +82,7 @@ func Cli() {
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
+	flag.BoolVar(&options.SkipPVAccessModeValidation, "skip-pv-access-mode-validation", false, "skip the volume access modes validation on the destination storage provider")
 	flag.IntVar(&options.PvcCopyTimeout, "timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
 
 	flag.Parse()
@@ -119,27 +121,30 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	srcPVs, err := kurlutils.PVSByStorageClass(ctx, clientset, options.SourceSCName)
-	if err != nil {
-		return fmt.Errorf("failed to get volumes using storage class %s: %w", options.SourceSCName, err)
-	}
-	pvMigrator := PVMigrator{
-		ctx:             ctx,
-		log:             w,
-		k8scli:          clientset,
-		srcSc:           options.SourceSCName,
-		dstSc:           options.DestSCName,
-		deletePVTimeout: 5 * time.Minute,
-		podTimeout:      10 * time.Second,
-	}
-	unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
-	if err != nil {
-		return fmt.Errorf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
-	}
+	// escape hatch - for DEV/TEST ONLY
+	if !options.SkipPVAccessModeValidation {
+		srcPVs, err := kurlutils.PVSByStorageClass(ctx, clientset, options.SourceSCName)
+		if err != nil {
+			return fmt.Errorf("failed to get volumes using storage class %s: %w", options.SourceSCName, err)
+		}
+		pvMigrator := PVMigrator{
+			ctx:             ctx,
+			log:             w,
+			k8scli:          clientset,
+			srcSc:           options.SourceSCName,
+			dstSc:           options.DestSCName,
+			deletePVTimeout: 5 * time.Minute,
+			podTimeout:      10 * time.Second,
+		}
+		unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
+		if err != nil {
+			return fmt.Errorf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
+		}
 
-	if unsupportedPVCs != nil {
-		PrintPVAccessModeErrors(unsupportedPVCs)
-		return fmt.Errorf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
+		if unsupportedPVCs != nil {
+			PrintPVAccessModeErrors(unsupportedPVCs)
+			return fmt.Errorf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
+		}
 	}
 
 	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)

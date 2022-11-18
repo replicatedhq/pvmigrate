@@ -1339,11 +1339,32 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 		pvcName = pvcName[0:31] + pvcName[len(pvcName)-32:]
 	}
 
+	// for testing purpose, this returns a pvc that is Pending to emulate a failure
+	if pvc.Status.Phase == corev1.ClaimPending {
+		return &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcName,
+				Namespace: "default",
+				UID:       pvc.UID, // for testing
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				StorageClassName: &sc,
+				AccessModes:      pvc.Spec.AccessModes,
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse("1Mi"),
+					},
+				},
+			},
+			// for testing
+			Status: corev1.PersistentVolumeClaimStatus{Phase: pvc.Status.Phase},
+		}
+	}
+
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName,
 			Namespace: "default",
-			UID:       pvc.UID, // for testing
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
@@ -1354,8 +1375,6 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 				},
 			},
 		},
-		// for testing
-		Status: corev1.PersistentVolumeClaimStatus{Phase: pvc.Status.Phase},
 	}
 }
 
@@ -1452,7 +1471,7 @@ func (p *PVMigrator) deleteTmpPVC(pvc *corev1.PersistentVolumeClaim) error {
 		ctx, pvc.Name, delopts,
 	); err != nil {
 		if !k8serrors.IsNotFound(err) {
-			log.Printf("failed to delete temp pvc %s: %s", pvc.Name, err)
+			p.log.Printf("failed to delete temp pvc %s: %s", pvc.Name, err)
 			return err
 		}
 	}
@@ -1465,7 +1484,7 @@ func (p *PVMigrator) deleteTmpPVC(pvc *corev1.PersistentVolumeClaim) error {
 	for _, pvc := range waitFor {
 		pv, ok := pvsByPVCName[pvc]
 		if !ok {
-			log.Printf("failed to find pv for temp pvc %s", pvc)
+			p.log.Printf("failed to find pv for temp pvc %s", pvc)
 			continue
 		}
 
@@ -1474,7 +1493,7 @@ func (p *PVMigrator) deleteTmpPVC(pvc *corev1.PersistentVolumeClaim) error {
 			if _, err := p.k8scli.CoreV1().PersistentVolumes().Get(
 				ctx, pv.Name, metav1.GetOptions{},
 			); err != nil && !k8serrors.IsNotFound(err) {
-				log.Printf("failed to get pv for temp pvc %s: %s", pvc, err)
+				p.log.Printf("failed to get pv for temp pvc %s: %s", pvc, err)
 			} else if err != nil && k8serrors.IsNotFound(err) {
 				break
 			}

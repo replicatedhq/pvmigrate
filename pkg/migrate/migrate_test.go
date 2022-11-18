@@ -3535,6 +3535,30 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 						},
 					},
 				},
+				&corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "tmpPod",
+						Namespace: "default",
+					},
+					Spec: corev1.PodSpec{
+						RestartPolicy: corev1.RestartPolicyNever,
+						Containers: []corev1.Container{
+							{
+								Name:  "busybox",
+								Image: "busybox",
+								Command: []string{
+									"sleep",
+									"3600",
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodPending},
+				},
 			},
 		},
 	} {
@@ -3550,8 +3574,9 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 				dstSc:           tt.dstStorageClass,
 				deletePVTimeout: 1 * time.Millisecond,
 				podTimeout:      1 * time.Millisecond,
+				tmpPodName:      "tmpPod",
 			}
-			result, err := pvm.getPvcError(tt.input)
+			result, err := pvm.checkVolumeAccessModes(*tt.input)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -3560,7 +3585,6 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 				}
 			}
 			req.Equal(tt.expected, result)
-			req.Fail("failing")
 		})
 	}
 }

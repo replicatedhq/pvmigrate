@@ -67,6 +67,7 @@ type PVMigrator struct {
 	dstSc           string
 	deletePVTimeout time.Duration
 	podTimeout      time.Duration
+	tmpPodName      string
 }
 
 // Cli uses CLI options to run Migrate
@@ -122,7 +123,15 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	if err != nil {
 		return fmt.Errorf("failed to get volumes using storage class %s: %w", options.SourceSCName, err)
 	}
-	pvMigrator := PVMigrator{ctx, w, clientset, options.SourceSCName, options.DestSCName, 5 * time.Minute, 10 * time.Second}
+	pvMigrator := PVMigrator{
+		ctx:             ctx,
+		log:             w,
+		k8scli:          clientset,
+		srcSc:           options.SourceSCName,
+		dstSc:           options.DestSCName,
+		deletePVTimeout: 5 * time.Minute,
+		podTimeout:      10 * time.Second,
+	}
 	unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
 	if err != nil {
 		return fmt.Errorf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
@@ -1267,9 +1276,12 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 }
 
 // buildPVConsumerPod creates a pod spec for consuming a pvc
-func buildPVConsumerPod(pvcName string) *corev1.Pod {
-	tmp := uuid.New().String()[:5]
-	podName := fmt.Sprintf("pv-access-modes-checker-for-%s-%s", pvcName, tmp)
+func buildPVConsumerPod(name, pvcName string) *corev1.Pod {
+	podName := name
+	if name == "" {
+		tmp := uuid.New().String()[:5]
+		podName = fmt.Sprintf("pvmigrate-vol-consumer-%s", tmp)
+	}
 	if len(podName) > 63 {
 		podName = podName[0:31] + podName[len(podName)-32:]
 	}
@@ -1317,7 +1329,7 @@ func buildPVConsumerPod(pvcName string) *corev1.Pod {
 // buildPVC creates a temporary PVC requesting for 1Mi of storage for a provided storage class name.
 func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
 	tmp := uuid.New().String()[:5]
-	pvcName := fmt.Sprintf("pvmigrate-%s-accessmode-test-claim-%s", pvc.Name, tmp)
+	pvcName := fmt.Sprintf("pvmigrate-claim-%s-%s", pvc.Name, tmp)
 	if len(pvcName) > 63 {
 		pvcName = pvcName[0:31] + pvcName[len(pvcName)-32:]
 	}
@@ -1356,9 +1368,9 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (p
 	}
 
 	// consume pvc to determine any access mode errors
-	pvConsumerPodSpec := buildPVConsumerPod(pvc.Name)
+	pvConsumerPodSpec := buildPVConsumerPod(p.tmpPodName, pvc.Name)
 	pvConsumerPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Create(p.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
-	if err != nil {
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
 		return pvcError{}, err
 	}
 
@@ -1376,7 +1388,7 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (p
 
 	podReadyTimeoutEnd := time.Now().Add(p.podTimeout)
 	for {
-		gotPod, err := p.k8scli.CoreV1().Pods(pvConsumerPod.Namespace).Get(p.ctx, pvConsumerPod.Name, metav1.GetOptions{})
+		gotPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Get(p.ctx, pvConsumerPodSpec.Name, metav1.GetOptions{})
 		if err != nil {
 			return pvcError{}, fmt.Errorf("failed getting pv consumer pod %s: %w", gotPod.Name, err)
 		}
@@ -1477,8 +1489,10 @@ func (p *PVMigrator) deleteTmpPVC(pvc *corev1.PersistentVolumeClaim) error {
 func (p *PVMigrator) deletePVConsumerPod(pod *corev1.Pod) error {
 	propagation := metav1.DeletePropagationForeground
 	delopts := metav1.DeleteOptions{PropagationPolicy: &propagation}
-	if err := p.k8scli.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, delopts); err != nil {
-		return err
+	if pod != nil {
+		if err := p.k8scli.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, delopts); err != nil {
+			return err
+		}
 	}
 	return nil
 }

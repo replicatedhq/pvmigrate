@@ -212,7 +212,7 @@ func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string) (*PVM
 }
 
 // PrintPVAccessModeErrors prints and formats the volume access mode errors in pvcErrors
-func PrintPVAccessModeErrors(pvcErrors map[string]map[string]pvcError) {
+func PrintPVAccessModeErrors(pvcErrors map[string]map[string]PVCError) {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 8, 2, '\t', 0)
 	fmt.Fprintf(tw, "The following persistent volume claims cannot be migrated:\n\n")
 	fmt.Fprintln(tw, "NAMESPACE\tPVC\tSOURCE\tREASON\tMESSAGE")
@@ -228,8 +228,8 @@ func PrintPVAccessModeErrors(pvcErrors map[string]map[string]pvcError) {
 // ValidateVolumeAccessModes checks whether the provided persistent volumes support the access modes
 // of the destination storage class.
 // returns a map of pvc errors indexed by namespace
-func (p *PVMigrator) ValidateVolumeAccessModes(pvs map[string]corev1.PersistentVolume) (map[string]map[string]pvcError, error) {
-	validationErrors := make(map[string]map[string]pvcError)
+func (p *PVMigrator) ValidateVolumeAccessModes(pvs map[string]corev1.PersistentVolume) (map[string]map[string]PVCError, error) {
+	validationErrors := make(map[string]map[string]PVCError)
 
 	if _, err := p.k8scli.StorageV1().StorageClasses().Get(p.ctx, p.dstSc, metav1.GetOptions{}); err != nil {
 		return nil, fmt.Errorf("failed to get destination storage class %s: %w", p.dstSc, err)
@@ -246,7 +246,7 @@ func (p *PVMigrator) ValidateVolumeAccessModes(pvs map[string]corev1.PersistentV
 			p.log.Printf("failed to check volume access mode for claim %s (%s): %s", pvc.Name, pv, err)
 			continue
 		}
-		validationErrors[pvc.Namespace] = map[string]pvcError{pvc.Name: v}
+		validationErrors[pvc.Namespace] = map[string]PVCError{pvc.Name: v}
 	}
 	return nil, nil
 }
@@ -263,13 +263,13 @@ func (pvc pvcCtx) getNodeNameRef() string {
 	return pvc.usedByPod.Spec.NodeName
 }
 
-type pvcError struct {
+type PVCError struct {
 	reason  string
 	from    string
 	message string
 }
 
-func (e *pvcError) Error() string {
+func (e *PVCError) Error() string {
 	return fmt.Sprintf("volume claim error from %s during %s: %s", e.from, e.reason, e.message)
 }
 
@@ -1361,7 +1361,7 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 
 // checkVolumeAccessModeValid checks if the access modes of a pv are supported by the
 // destination storage class.
-func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (pvcError, error) {
+func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (PVCError, error) {
 	var err error
 
 	// create temp pvc for storage class
@@ -1369,14 +1369,14 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (p
 	if tmpPVC, err = p.k8scli.CoreV1().PersistentVolumeClaims("default").Create(
 		p.ctx, tmpPVC, metav1.CreateOptions{},
 	); err != nil {
-		return pvcError{}, fmt.Errorf("failed to create temporary pvc: %w", err)
+		return PVCError{}, fmt.Errorf("failed to create temporary pvc: %w", err)
 	}
 
 	// consume pvc to determine any access mode errors
 	pvConsumerPodSpec := buildPVConsumerPod(p.tmpPodName, pvc.Name)
 	pvConsumerPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Create(p.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		return pvcError{}, err
+		return PVCError{}, err
 	}
 
 	// cleanup pvc and pod at the end
@@ -1395,12 +1395,12 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (p
 	for {
 		gotPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Get(p.ctx, pvConsumerPodSpec.Name, metav1.GetOptions{})
 		if err != nil {
-			return pvcError{}, fmt.Errorf("failed getting pv consumer pod %s: %w", gotPod.Name, err)
+			return PVCError{}, fmt.Errorf("failed getting pv consumer pod %s: %w", gotPod.Name, err)
 		}
 
 		switch {
 		case k8spodutils.IsPodReady(gotPod):
-			return pvcError{}, nil
+			return PVCError{}, nil
 		default:
 			time.Sleep(time.Second)
 		}
@@ -1414,12 +1414,12 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (p
 				// check pvc status and get error
 				pvcPendingError, err := p.getPvcError(tmpPVC)
 				if err != nil {
-					return pvcError{}, fmt.Errorf("failed to get PVC error: %s", err)
+					return PVCError{}, fmt.Errorf("failed to get PVC error: %s", err)
 				}
 				return pvcPendingError, nil
 			}
 			// pod failed for other reason(s)
-			return pvcError{}, fmt.Errorf("unexpected status for pod %s: %s", gotPod.Name, gotPod.Status.Phase)
+			return PVCError{}, fmt.Errorf("unexpected status for pod %s: %s", gotPod.Name, gotPod.Status.Phase)
 		}
 	}
 }
@@ -1503,23 +1503,23 @@ func (p *PVMigrator) deletePVConsumerPod(pod *corev1.Pod) error {
 }
 
 // getPvcError returns the error event for why a PVC is in Pending status
-func (p *PVMigrator) getPvcError(pvc *corev1.PersistentVolumeClaim) (pvcError, error) {
+func (p *PVMigrator) getPvcError(pvc *corev1.PersistentVolumeClaim) (PVCError, error) {
 	// no need to inspect pvc
 	if pvc.Status.Phase != corev1.ClaimPending {
-		return pvcError{}, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
+		return PVCError{}, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
 	}
 
 	eventSelector := p.k8scli.CoreV1().Events(pvc.Namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
 	pvcEvents, err := p.k8scli.CoreV1().Events(pvc.Namespace).List(p.ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
 	if err != nil {
-		return pvcError{}, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
+		return PVCError{}, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
 	}
 
 	// get pending reason
 	for _, event := range pvcEvents.Items {
 		if event.Reason == "ProvisioningFailed" {
-			return pvcError{event.Reason, event.Source.Component, event.Message}, nil
+			return PVCError{event.Reason, event.Source.Component, event.Message}, nil
 		}
 	}
-	return pvcError{}, fmt.Errorf("Could not determine reason for why PVC %s is in Pending status", pvc.Name)
+	return PVCError{}, fmt.Errorf("Could not determine reason for why PVC %s is in Pending status", pvc.Name)
 }

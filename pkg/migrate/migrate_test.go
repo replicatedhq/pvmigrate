@@ -3106,7 +3106,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 		wantErr         bool
 		resources       []runtime.Object
 		input           map[string]corev1.PersistentVolume
-		expected        map[string]map[string]pvcError
+		expected        map[string]map[string]PVCError
 	}{
 		{
 			name: "no errors",
@@ -3282,7 +3282,7 @@ func Test_getPvcError(t *testing.T) {
 		wantErr         bool
 		resources       []runtime.Object
 		input           *corev1.PersistentVolumeClaim
-		expected        pvcError
+		expected        PVCError
 	}{
 		{
 			name: "get pvc error from events",
@@ -3294,7 +3294,7 @@ func Test_getPvcError(t *testing.T) {
 				},
 				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
 			},
-			expected: pvcError{
+			expected: PVCError{
 				reason:  "ProvisioningFailed",
 				from:    "kubernetes.io/no-provisioner",
 				message: "Only support ReadWriteOnce access mode",
@@ -3351,7 +3351,7 @@ func Test_getPvcError(t *testing.T) {
 				},
 				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
 			},
-			expected:        pvcError{},
+			expected:        PVCError{},
 			wantErr:         true,
 			srcStorageClass: "srcSc",
 			dstStorageClass: "dstSc",
@@ -3405,7 +3405,7 @@ func Test_getPvcError(t *testing.T) {
 				},
 				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
 			},
-			expected:        pvcError{},
+			expected:        PVCError{},
 			wantErr:         true,
 			srcStorageClass: "srcSc",
 			dstStorageClass: "dstSc",
@@ -3440,7 +3440,7 @@ func Test_getPvcError(t *testing.T) {
 				},
 				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
 			},
-			expected:        pvcError{},
+			expected:        PVCError{},
 			wantErr:         true,
 			srcStorageClass: "srcSc",
 			dstStorageClass: "dstSc",
@@ -3483,7 +3483,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 		wantErr         bool
 		resources       []runtime.Object
 		input           *corev1.PersistentVolumeClaim
-		expected        pvcError
+		expected        PVCError
 	}{
 		{
 			name: "access mode not supported",
@@ -3499,7 +3499,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 				},
 				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
 			},
-			expected: pvcError{
+			expected: PVCError{
 				reason:  "ProvisioningFailed",
 				from:    "kubernetes.io/no-provisioner",
 				message: "Only support ReadWriteOnce access mode",

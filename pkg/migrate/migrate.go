@@ -141,7 +141,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 			return fmt.Errorf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
 		}
 
-		if unsupportedPVCs != nil {
+		if len(unsupportedPVCs) == 0 {
 			PrintPVAccessModeErrors(unsupportedPVCs)
 			return fmt.Errorf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
 		}
@@ -248,7 +248,7 @@ func (p *PVMigrator) ValidateVolumeAccessModes(pvs map[string]corev1.PersistentV
 		}
 		validationErrors[pvc.Namespace] = map[string]PVCError{pvc.Name: v}
 	}
-	return nil, nil
+	return validationErrors, nil
 }
 
 type pvcCtx struct {

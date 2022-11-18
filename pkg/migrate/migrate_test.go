@@ -3109,7 +3109,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 		expected        map[string]map[string]PVCError
 	}{
 		{
-			name: "no errors",
+			name: "should pass due to no accessmode errors",
 			input: map[string]corev1.PersistentVolume{
 				"pv0": {
 					ObjectMeta: metav1.ObjectMeta{
@@ -3123,7 +3123,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 					},
 				},
 			},
-			expected:        nil,
+			expected:        make(map[string]map[string]PVCError),
 			srcStorageClass: "srcSc",
 			dstStorageClass: "dstSc",
 			resources: []runtime.Object{

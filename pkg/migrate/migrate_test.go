@@ -3102,7 +3102,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 		srcStorageClass string
 		dstStorageClass string
 		deletePVTimeout time.Duration
-		podTimeout      time.Duration
+		podReadyTimeout time.Duration
 		wantErr         bool
 		resources       []runtime.Object
 		input           map[string]corev1.PersistentVolume
@@ -3257,7 +3257,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 				srcSc:           tt.srcStorageClass,
 				dstSc:           tt.dstStorageClass,
 				deletePVTimeout: 1 * time.Millisecond,
-				podTimeout:      1 * time.Millisecond,
+				podReadyTimeout: 1 * time.Millisecond,
 			}
 			result, err := pvm.ValidateVolumeAccessModes(tt.input)
 			if err != nil {
@@ -3458,7 +3458,7 @@ func Test_getPvcError(t *testing.T) {
 				srcSc:           tt.srcStorageClass,
 				dstSc:           tt.dstStorageClass,
 				deletePVTimeout: 1 * time.Millisecond,
-				podTimeout:      1 * time.Millisecond,
+				podReadyTimeout: 1 * time.Millisecond,
 			}
 			result, err := pvm.getPvcError(tt.input)
 			if err != nil {
@@ -3573,7 +3573,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 				srcSc:           tt.srcStorageClass,
 				dstSc:           tt.dstStorageClass,
 				deletePVTimeout: 1 * time.Millisecond,
-				podTimeout:      1 * time.Millisecond,
+				podReadyTimeout: 1 * time.Millisecond,
 				tmpPodName:      "tmpPod",
 			}
 			result, err := pvm.checkVolumeAccessModes(*tt.input)

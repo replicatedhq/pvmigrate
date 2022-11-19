@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	k8spodutils "k8s.io/kubernetes/pkg/api/v1/pod"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -67,7 +68,7 @@ type PVMigrator struct {
 	srcSc           string
 	dstSc           string
 	deletePVTimeout time.Duration
-	podTimeout      time.Duration
+	podReadyTimeout time.Duration
 	tmpPodName      string
 }
 
@@ -134,7 +135,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 			srcSc:           options.SourceSCName,
 			dstSc:           options.DestSCName,
 			deletePVTimeout: 5 * time.Minute,
-			podTimeout:      10 * time.Second,
+			podReadyTimeout: 30 * time.Second,
 		}
 		unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
 		if err != nil {
@@ -207,16 +208,16 @@ func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string) (*PVM
 		srcSc:           srcSC,
 		dstSc:           dstSC,
 		deletePVTimeout: 5 * time.Minute,
-		podTimeout:      10 * time.Second,
+		podReadyTimeout: 30 * time.Second,
 	}, nil
 }
 
 // PrintPVAccessModeErrors prints and formats the volume access mode errors in pvcErrors
 func PrintPVAccessModeErrors(pvcErrors map[string]map[string]PVCError) {
-	tw := tabwriter.NewWriter(os.Stdout, 0, 8, 2, '\t', 0)
+	tw := tabwriter.NewWriter(os.Stdout, 0, 8, 8, '\t', 0)
 	fmt.Fprintf(tw, "The following persistent volume claims cannot be migrated:\n\n")
 	fmt.Fprintln(tw, "NAMESPACE\tPVC\tSOURCE\tREASON\tMESSAGE")
-	fmt.Fprintf(tw, "---------\t---\t------\t-------\t------\n")
+	fmt.Fprintf(tw, "---------\t---\t------\t------\t-------\n")
 	for ns, pvcErrs := range pvcErrors {
 		for pvc, pvcErr := range pvcErrs {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ns, pvc, pvcErr.from, pvcErr.reason, pvcErr.message)
@@ -246,7 +247,9 @@ func (p *PVMigrator) ValidateVolumeAccessModes(pvs map[string]corev1.PersistentV
 			p.log.Printf("failed to check volume access mode for claim %s (%s): %s", pvc.Name, pv, err)
 			continue
 		}
-		validationErrors[pvc.Namespace] = map[string]PVCError{pvc.Name: v}
+		if v != (PVCError{}) { // test for empty struct
+			validationErrors[pvc.Namespace] = map[string]PVCError{pvc.Name: v}
+		}
 	}
 	return validationErrors, nil
 }
@@ -1373,7 +1376,7 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (P
 	}
 
 	// consume pvc to determine any access mode errors
-	pvConsumerPodSpec := buildPVConsumerPod(p.tmpPodName, pvc.Name)
+	pvConsumerPodSpec := buildPVConsumerPod(p.tmpPodName, tmpPVC.Name)
 	pvConsumerPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Create(p.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
 		return PVCError{}, err
@@ -1391,7 +1394,7 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (P
 		}
 	}()
 
-	podReadyTimeoutEnd := time.Now().Add(p.podTimeout)
+	podReadyTimeoutEnd := time.Now().Add(p.podReadyTimeout)
 	for {
 		gotPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Get(p.ctx, pvConsumerPodSpec.Name, metav1.GetOptions{})
 		if err != nil {
@@ -1509,8 +1512,7 @@ func (p *PVMigrator) getPvcError(pvc *corev1.PersistentVolumeClaim) (PVCError, e
 		return PVCError{}, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
 	}
 
-	eventSelector := p.k8scli.CoreV1().Events(pvc.Namespace).GetFieldSelector(&pvc.Name, &pvc.Namespace, &pvc.Kind, (*string)(&pvc.UID))
-	pvcEvents, err := p.k8scli.CoreV1().Events(pvc.Namespace).List(p.ctx, metav1.ListOptions{FieldSelector: eventSelector.String()})
+	pvcEvents, err := p.k8scli.CoreV1().Events(pvc.Namespace).Search(scheme.Scheme, pvc)
 	if err != nil {
 		return PVCError{}, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
 	}

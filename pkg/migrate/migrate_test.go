@@ -3574,7 +3574,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 				dstSc:           tt.dstStorageClass,
 				deletePVTimeout: 1 * time.Millisecond,
 				podReadyTimeout: 1 * time.Millisecond,
-				tmpPodName:      "tmpPod",
+				podNameOverride: "tmpPod",
 			}
 			result, err := pvm.checkVolumeAccessModes(*tt.input)
 			if err != nil {
@@ -3585,6 +3585,276 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 				}
 			}
 			req.Equal(tt.expected, result)
+		})
+	}
+}
+
+func Test_buildTmpPVC(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		pvcNameOverride string
+		dstStorageClass string
+		input           *corev1.PersistentVolumeClaim
+		expectedPVC     *corev1.PersistentVolumeClaim
+		expectedName    string
+	}{
+		{
+			name: "generate unique temp pvc name",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+				},
+			},
+			expectedPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Mi"),
+						},
+					},
+				},
+			},
+			expectedName:    "pvmigrate-claim-test-pvc-",
+			dstStorageClass: "dstSc",
+		},
+		{
+			name: "trim pvc name if longer than 63 chars",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "really-long-pvc-name-that-should-be-trimmed-to-avoid-an-error",
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+				},
+			},
+			expectedPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Mi"),
+						},
+					},
+				},
+			},
+			expectedName:    "pvmigrate-claim-really-long-pvc-trimmed-to-avoid-an-error-",
+			dstStorageClass: "dstSc",
+		},
+		{
+			name: "override pvc name",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-test-pvc",
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+				},
+			},
+			expectedPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Mi"),
+						},
+					},
+				},
+			},
+			pvcNameOverride: "pvc-name-override",
+			expectedName:    "pvc-name-override",
+			dstStorageClass: "dstSc",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			var pvcNameOverride string
+			if tt.pvcNameOverride != "" {
+				pvcNameOverride = tt.pvcNameOverride
+			}
+			pvm := PVMigrator{
+				dstSc:           tt.dstStorageClass,
+				pvcNameOverride: pvcNameOverride,
+			}
+			pvc := pvm.buildTmpPVC(*tt.input, tt.dstStorageClass)
+			req.True(strings.HasPrefix(pvc.Name, tt.expectedName))
+			req.Equal(tt.expectedPVC.Spec, pvc.Spec)
+		})
+	}
+}
+
+func Test_buildPVConsumerPod(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		podNameOverride string
+		pvcName         string
+		expectedPod     *corev1.Pod
+		expectedName    string
+	}{
+		{
+			name:    "generate unique temp pod name",
+			pvcName: "test-pvc",
+			expectedPod: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "tmp",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "test-pvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "busybox",
+							Image: "busybox",
+							Command: []string{
+								"sleep",
+								"3600",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/tmpmount",
+									Name:      "tmp",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedName: "pvmigrate-vol-consumer-test-pvc-",
+		},
+		{
+			name:    "trim pod name if longer than 63 chars",
+			pvcName: "pvc-name-that-should-be-trimmed-because-it-will-cause-an-err",
+			expectedPod: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "tmp",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "pvc-name-that-should-be-trimmed-because-it-will-cause-an-err",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "busybox",
+							Image: "busybox",
+							Command: []string{
+								"sleep",
+								"3600",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/tmpmount",
+									Name:      "tmp",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedName: "pvmigrate-vol-consumer-pvc-namecause-it-will-cause-an-err-",
+		},
+		{
+			name:    "override temp pod name",
+			pvcName: "test-pvc",
+			expectedPod: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "tmp",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "test-pvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "busybox",
+							Image: "busybox",
+							Command: []string{
+								"sleep",
+								"3600",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/tmpmount",
+									Name:      "tmp",
+								},
+							},
+						},
+					},
+				},
+			},
+			podNameOverride: "my pod name override",
+			expectedName:    "my pod name override",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			var podNameOverride string
+			if tt.podNameOverride != "" {
+				podNameOverride = tt.podNameOverride
+			}
+			pvm := PVMigrator{
+				podNameOverride: podNameOverride,
+			}
+			pod := pvm.buildPVConsumerPod(tt.pvcName)
+			req.True(strings.HasPrefix(pod.Name, tt.expectedName))
+			req.Equal(tt.expectedPod.Spec, pod.Spec)
 		})
 	}
 }

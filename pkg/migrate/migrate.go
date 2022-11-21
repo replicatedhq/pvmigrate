@@ -69,7 +69,8 @@ type PVMigrator struct {
 	dstSc           string
 	deletePVTimeout time.Duration
 	podReadyTimeout time.Duration
-	tmpPodName      string
+	podNameOverride string
+	pvcNameOverride string
 }
 
 // Cli uses CLI options to run Migrate
@@ -1284,11 +1285,11 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 }
 
 // buildPVConsumerPod creates a pod spec for consuming a pvc
-func buildPVConsumerPod(name, pvcName string) *corev1.Pod {
-	podName := name
-	if name == "" {
+func (p *PVMigrator) buildPVConsumerPod(pvcName string) *corev1.Pod {
+	podName := p.podNameOverride
+	if podName == "" {
 		tmp := uuid.New().String()[:5]
-		podName = fmt.Sprintf("pvmigrate-vol-consumer-%s", tmp)
+		podName = fmt.Sprintf("pvmigrate-vol-consumer-%s-%s", pvcName, tmp)
 	}
 	if len(podName) > 63 {
 		podName = podName[0:31] + podName[len(podName)-32:]
@@ -1335,9 +1336,12 @@ func buildPVConsumerPod(name, pvcName string) *corev1.Pod {
 }
 
 // buildPVC creates a temporary PVC requesting for 1Mi of storage for a provided storage class name.
-func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
-	tmp := uuid.New().String()[:5]
-	pvcName := fmt.Sprintf("pvmigrate-claim-%s-%s", pvc.Name, tmp)
+func (p *PVMigrator) buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
+	pvcName := p.pvcNameOverride
+	if pvcName == "" {
+		tmp := uuid.New().String()[:5]
+		pvcName = fmt.Sprintf("pvmigrate-claim-%s-%s", pvc.Name, tmp)
+	}
 	if len(pvcName) > 63 {
 		pvcName = pvcName[0:31] + pvcName[len(pvcName)-32:]
 	}
@@ -1346,7 +1350,6 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName,
 			Namespace: "default",
-			UID:       pvc.UID, // for testing
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
@@ -1357,7 +1360,8 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 				},
 			},
 		},
-		// for testing
+		// for testing/mocking
+		// This fields gets set and updated by the kube api server
 		Status: corev1.PersistentVolumeClaimStatus{Phase: pvc.Status.Phase},
 	}
 }
@@ -1368,7 +1372,7 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (P
 	var err error
 
 	// create temp pvc for storage class
-	tmpPVC := buildTmpPVC(pvc, p.dstSc)
+	tmpPVC := p.buildTmpPVC(pvc, p.dstSc)
 	if tmpPVC, err = p.k8scli.CoreV1().PersistentVolumeClaims("default").Create(
 		p.ctx, tmpPVC, metav1.CreateOptions{},
 	); err != nil {
@@ -1376,7 +1380,7 @@ func (p *PVMigrator) checkVolumeAccessModes(pvc corev1.PersistentVolumeClaim) (P
 	}
 
 	// consume pvc to determine any access mode errors
-	pvConsumerPodSpec := buildPVConsumerPod(p.tmpPodName, tmpPVC.Name)
+	pvConsumerPodSpec := p.buildPVConsumerPod(tmpPVC.Name)
 	pvConsumerPod, err := p.k8scli.CoreV1().Pods(pvConsumerPodSpec.Namespace).Create(p.ctx, pvConsumerPodSpec, metav1.CreateOptions{})
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
 		return PVCError{}, err

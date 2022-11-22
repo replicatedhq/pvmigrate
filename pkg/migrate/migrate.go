@@ -193,7 +193,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 }
 
 // NewPVMigrator returns a PV migration context
-func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string, podReadyTimeout time.Duration) (*PVMigrator, error) {
+func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string, podReadyTimeout int) (*PVMigrator, error) {
 	k8scli, err := k8sclient.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
@@ -209,7 +209,7 @@ func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string, podRe
 		return nil, fmt.Errorf("no logger provided")
 	}
 
-	podReadinessTimeout := podReadyTimeout
+	podReadinessTimeout := time.Duration(podReadyTimeout)
 	if podReadinessTimeout == 0 {
 		// default
 		podReadinessTimeout = 60 * time.Second
@@ -222,7 +222,7 @@ func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string, podRe
 		srcSc:           srcSC,
 		dstSc:           dstSC,
 		deletePVTimeout: 5 * time.Minute,
-		podReadyTimeout: podReadinessTimeout,
+		podReadyTimeout: podReadinessTimeout * time.Second,
 	}, nil
 }
 

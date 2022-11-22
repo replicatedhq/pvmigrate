@@ -927,7 +927,7 @@ func TestGetPVCs(t *testing.T) {
 
 func TestNewPVMigrator(t *testing.T) {
 	// test empty logger
-	_, err := NewPVMigrator(&rest.Config{}, nil, "src", "dst")
+	_, err := NewPVMigrator(&rest.Config{}, nil, "src", "dst", 0)
 	if err == nil || err.Error() != "no logger provided" {
 		t.Errorf("expected failure creating object: %v", err)
 	}
@@ -935,19 +935,19 @@ func TestNewPVMigrator(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 
 	// test src storage class
-	_, err = NewPVMigrator(&rest.Config{}, logger, "", "dst")
+	_, err = NewPVMigrator(&rest.Config{}, logger, "", "dst", 0)
 	if err == nil || err.Error() != "empty source storage class" {
 		t.Errorf("expected failure creating object: %v", err)
 	}
 
 	// test empty dst sc
-	_, err = NewPVMigrator(&rest.Config{}, logger, "src", "")
+	_, err = NewPVMigrator(&rest.Config{}, logger, "src", "", 0)
 	if err == nil || err.Error() != "empty destination storage class" {
 		t.Errorf("expected failure creating object: %v", err)
 	}
 
 	// happy path
-	_, err = NewPVMigrator(&rest.Config{}, logger, "src", "dst")
+	_, err = NewPVMigrator(&rest.Config{}, logger, "src", "dst", 0)
 	if err != nil {
 		t.Errorf("unexpected failure creating object: %v", err)
 	}

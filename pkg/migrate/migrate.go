@@ -57,6 +57,7 @@ type Options struct {
 	SkipSourceValidation       bool
 	SkipPVAccessModeValidation bool
 	PvcCopyTimeout             int
+	PodReadyTimeout            int
 }
 
 // PVMigrator represents a migration context for migrating data from all srcSC volumes to
@@ -86,6 +87,7 @@ func Cli() {
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
 	flag.BoolVar(&options.SkipPVAccessModeValidation, "skip-pv-access-mode-validation", false, "skip the volume access modes validation on the destination storage provider")
 	flag.IntVar(&options.PvcCopyTimeout, "timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
+	flag.IntVar(&options.PodReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
 
 	flag.Parse()
 
@@ -104,6 +106,37 @@ func Cli() {
 
 	output := log.New(os.Stdout, "", 0) // this has no time prefix etc
 
+	// escape hatch - for DEV/TEST ONLY
+	if !options.SkipPVAccessModeValidation {
+		srcPVs, err := kurlutils.PVSByStorageClass(context.TODO(), clientset, options.SourceSCName)
+		if err != nil {
+			fmt.Printf("failed to get volumes using storage class %s: %s", options.SourceSCName, err)
+			os.Exit(1)
+		}
+
+		pvMigrator := PVMigrator{
+			ctx:             context.TODO(),
+			log:             output,
+			k8scli:          clientset,
+			srcSc:           options.SourceSCName,
+			dstSc:           options.DestSCName,
+			deletePVTimeout: 5 * time.Minute,
+			podReadyTimeout: time.Duration(options.PodReadyTimeout),
+		}
+		unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
+		if err != nil {
+			fmt.Printf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
+			os.Exit(1)
+		}
+
+		if len(unsupportedPVCs) != 0 {
+			PrintPVAccessModeErrors(unsupportedPVCs)
+			fmt.Printf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
+			os.Exit(0)
+		}
+	}
+
+	// start the migration
 	err = Migrate(context.TODO(), output, clientset, options)
 	if err != nil {
 		fmt.Printf("%s\n", err.Error())
@@ -121,32 +154,6 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)
 	if err != nil {
 		return err
-	}
-
-	// escape hatch - for DEV/TEST ONLY
-	if !options.SkipPVAccessModeValidation {
-		srcPVs, err := kurlutils.PVSByStorageClass(ctx, clientset, options.SourceSCName)
-		if err != nil {
-			return fmt.Errorf("failed to get volumes using storage class %s: %w", options.SourceSCName, err)
-		}
-		pvMigrator := PVMigrator{
-			ctx:             ctx,
-			log:             w,
-			k8scli:          clientset,
-			srcSc:           options.SourceSCName,
-			dstSc:           options.DestSCName,
-			deletePVTimeout: 5 * time.Minute,
-			podReadyTimeout: 30 * time.Second,
-		}
-		unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
-		if err != nil {
-			return fmt.Errorf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
-		}
-
-		if len(unsupportedPVCs) != 0 {
-			PrintPVAccessModeErrors(unsupportedPVCs)
-			return fmt.Errorf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
-		}
 	}
 
 	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
@@ -186,7 +193,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 }
 
 // NewPVMigrator returns a PV migration context
-func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string) (*PVMigrator, error) {
+func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string, podReadyTimeout time.Duration) (*PVMigrator, error) {
 	k8scli, err := k8sclient.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
@@ -202,6 +209,12 @@ func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string) (*PVM
 		return nil, fmt.Errorf("no logger provided")
 	}
 
+	podReadinessTimeout := podReadyTimeout
+	if podReadinessTimeout == 0 {
+		// default
+		podReadinessTimeout = 60 * time.Second
+	}
+
 	return &PVMigrator{
 		ctx:             context.Background(),
 		log:             log,
@@ -209,7 +222,7 @@ func NewPVMigrator(cfg *rest.Config, log *log.Logger, srcSC, dstSC string) (*PVM
 		srcSc:           srcSC,
 		dstSc:           dstSC,
 		deletePVTimeout: 5 * time.Minute,
-		podReadyTimeout: 30 * time.Second,
+		podReadyTimeout: podReadinessTimeout,
 	}, nil
 }
 

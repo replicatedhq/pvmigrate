@@ -121,7 +121,7 @@ func Cli() {
 			srcSc:           options.SourceSCName,
 			dstSc:           options.DestSCName,
 			deletePVTimeout: 5 * time.Minute,
-			podReadyTimeout: time.Duration(options.PodReadyTimeout),
+			podReadyTimeout: time.Duration(options.PodReadyTimeout) * time.Second,
 		}
 		unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
 		if err != nil {

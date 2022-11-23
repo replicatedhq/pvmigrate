@@ -86,7 +86,7 @@ func Cli() {
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
 	flag.BoolVar(&options.SkipPVAccessModeValidation, "skip-pv-access-mode-validation", false, "skip the volume access modes validation on the destination storage provider")
-	flag.IntVar(&options.PvcCopyTimeout, "timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
+	flag.IntVar(&options.PvcCopyTimeout, "pvc-copy-timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
 	flag.IntVar(&options.PodReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
 
 	flag.Parse()

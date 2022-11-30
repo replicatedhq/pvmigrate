@@ -3109,7 +3109,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 		expected        map[string]map[string]PVCError
 	}{
 		{
-			name: "should pass due to no accessmode errors",
+			name: "With compatible access modes, expect no errors",
 			input: map[string]corev1.PersistentVolume{
 				"pv0": {
 					ObjectMeta: metav1.ObjectMeta{
@@ -3156,7 +3156,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 			},
 		},
 		{
-			name: "should fail when there is no matching pvc for a pv",
+			name: "When there is no matching pvc for a pv, expect error",
 			input: map[string]corev1.PersistentVolume{
 				"pv0": {
 					ObjectMeta: metav1.ObjectMeta{
@@ -3218,7 +3218,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 			},
 		},
 		{
-			name: "should fail when destination storage class is not found",
+			name: "When destination storage class is not found, expect error",
 			input: map[string]corev1.PersistentVolume{
 				"pv0": {
 					ObjectMeta: metav1.ObjectMeta{
@@ -3285,7 +3285,7 @@ func Test_getPvcError(t *testing.T) {
 		expected        PVCError
 	}{
 		{
-			name: "get pvc error from events",
+			name: "When there is a PVC error, expect ProvisioningFailed event",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pvc",
@@ -3342,7 +3342,7 @@ func Test_getPvcError(t *testing.T) {
 			},
 		},
 		{
-			name: "no events that match the reason ProvisioningFailed",
+			name: "When PVC event reason is not ProvisioningFailed, expect error",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pvc",
@@ -3396,7 +3396,7 @@ func Test_getPvcError(t *testing.T) {
 			},
 		},
 		{
-			name: "no events for pvc",
+			name: "When PVC is pending due to an error but there are no events for it, expect error",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pvc",
@@ -3431,7 +3431,7 @@ func Test_getPvcError(t *testing.T) {
 			},
 		},
 		{
-			name: "pvc is not in Pending status",
+			name: "When PVC is not in Pending status, expect error",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pvc",
@@ -3486,7 +3486,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 		expected        PVCError
 	}{
 		{
-			name: "access mode not supported",
+			name: "When the PVC access mode is not supported by destination storage provider, expect PVCError",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pvc",
@@ -3599,7 +3599,7 @@ func Test_buildTmpPVC(t *testing.T) {
 		expectedName    string
 	}{
 		{
-			name: "generate unique temp pvc name",
+			name: "When PVC name is not overridden, expect unique temp pvc name",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pvc",
@@ -3628,7 +3628,7 @@ func Test_buildTmpPVC(t *testing.T) {
 			dstStorageClass: "dstSc",
 		},
 		{
-			name: "trim pvc name if longer than 63 chars",
+			name: "When PVC name is longer than 63 chars, expect name to be trimmed",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "really-long-pvc-name-that-should-be-trimmed-to-avoid-an-error",
@@ -3657,7 +3657,7 @@ func Test_buildTmpPVC(t *testing.T) {
 			dstStorageClass: "dstSc",
 		},
 		{
-			name: "override pvc name",
+			name: "When PVC name is overriden, expect non-UID generated name",
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "my-test-pvc",
@@ -3713,7 +3713,7 @@ func Test_buildPVConsumerPod(t *testing.T) {
 		expectedName    string
 	}{
 		{
-			name:    "generate unique temp pod name",
+			name:    "When pod name not overriden, expect unique pod name",
 			pvcName: "test-pvc",
 			expectedPod: &corev1.Pod{
 				TypeMeta: metav1.TypeMeta{
@@ -3756,7 +3756,7 @@ func Test_buildPVConsumerPod(t *testing.T) {
 			expectedName: "pvmigrate-vol-consumer-test-pvc-",
 		},
 		{
-			name:    "trim pod name if longer than 63 chars",
+			name:    "When pod name is longer than 63 chars, expect pod name to be trimmed",
 			pvcName: "pvc-name-that-should-be-trimmed-because-it-will-cause-an-err",
 			expectedPod: &corev1.Pod{
 				TypeMeta: metav1.TypeMeta{
@@ -3799,7 +3799,7 @@ func Test_buildPVConsumerPod(t *testing.T) {
 			expectedName: "pvmigrate-vol-consumer-pvc-namecause-it-will-cause-an-err-",
 		},
 		{
-			name:    "override temp pod name",
+			name:    "When pod name is overriden, expect non-UID name",
 			pvcName: "test-pvc",
 			expectedPod: &corev1.Pod{
 				TypeMeta: metav1.TypeMeta{

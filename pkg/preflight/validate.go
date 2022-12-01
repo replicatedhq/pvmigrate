@@ -153,7 +153,7 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 	}
 }
 
-// checkVolumeAccessModeValid checks if the access modes of a pv are supported by the
+// checkVolumeAccessModes checks if the access modes of a pv are supported by the
 // destination storage class.
 func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, pvc corev1.PersistentVolumeClaim, timeout time.Duration) (*pvcFailure, error) {
 	var err error
@@ -294,7 +294,7 @@ func deletePVConsumerPod(client k8sclient.Interface, pod *corev1.Pod) error {
 	return nil
 }
 
-// getPvcError returns the error event for why a PVC is in Pending status
+// getPvcError returns the failure event for why a PVC is in Pending status
 func getPvcError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) (*pvcFailure, error) {
 	// no need to inspect pvc
 	if pvc.Status.Phase != corev1.ClaimPending {

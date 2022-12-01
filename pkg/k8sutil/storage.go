@@ -30,3 +30,22 @@ func PVsByStorageClass(ctx context.Context, cli kubernetes.Interface, scname str
 	}
 	return pvs, nil
 }
+
+// PVCSForPVs returns a pv to pvc mapping. the returned map is indexed by the pv name.
+func PVCSForPVs(ctx context.Context, cli kubernetes.Interface, pvs map[string]corev1.PersistentVolume) (map[string]corev1.PersistentVolumeClaim, error) {
+	pvcs := map[string]corev1.PersistentVolumeClaim{}
+	for pvidx, pv := range pvs {
+		cref := pv.Spec.ClaimRef
+		if cref == nil {
+			return nil, fmt.Errorf("pv %s without associated PVC", pvidx)
+		}
+
+		pvc, err := cli.CoreV1().PersistentVolumeClaims(cref.Namespace).Get(ctx, cref.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get pvc %s for pv %s: %w", cref.Name, pvidx, err)
+		}
+
+		pvcs[pvidx] = *pvc.DeepCopy()
+	}
+	return pvcs, nil
+}

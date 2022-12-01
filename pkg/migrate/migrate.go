@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -19,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 const (
@@ -43,90 +40,15 @@ var isDestScLocalVolumeProvisioner bool
 
 // Options is the set of options that should be provided to Migrate
 type Options struct {
-	SourceSCName               string
-	DestSCName                 string
-	RsyncImage                 string
-	Namespace                  string
-	SetDefaults                bool
-	VerboseCopy                bool
-	SkipSourceValidation       bool
-	SkipPVAccessModeValidation bool
-	PvcCopyTimeout             int
-	PodReadyTimeout            int
-}
-
-// Cli uses CLI options to run Migrate
-func Cli() {
-	var options Options
-	var dryRun bool
-
-	flag.StringVar(&options.SourceSCName, "source-sc", "", "storage provider name to migrate from")
-	flag.StringVar(&options.DestSCName, "dest-sc", "", "storage provider name to migrate to")
-	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
-	flag.StringVar(&options.Namespace, "namespace", "", "only migrate PVCs within this namespace")
-	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
-	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
-	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
-	flag.BoolVar(&options.SkipPVAccessModeValidation, "skip-pv-access-mode-validation", false, "skip the volume access modes validation on the destination storage provider")
-	flag.IntVar(&options.PvcCopyTimeout, "pvc-copy-timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
-	flag.IntVar(&options.PodReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
-	flag.BoolVar(&dryRun, "dry-run", false, "run validation checks without running the migrations")
-
-	flag.Parse()
-
-	// setup k8s
-	cfg, err := config.GetConfig()
-	if err != nil {
-		fmt.Printf("failed to get config: %s\n", err.Error())
-		os.Exit(1)
-	}
-
-	clientset, err := k8sclient.NewForConfig(cfg)
-	if err != nil {
-		fmt.Printf("failed to create kubernetes clientset: %s\n", err.Error())
-		os.Exit(1)
-	}
-
-	output := log.New(os.Stdout, "", 0) // this has no time prefix etc
-
-	// escape hatch - for DEV/TEST ONLY
-	if !options.SkipPVAccessModeValidation {
-		srcPVs, err := kurlutils.PVSByStorageClass(context.TODO(), clientset, options.SourceSCName)
-		if err != nil {
-			fmt.Printf("failed to get volumes using storage class %s: %s", options.SourceSCName, err)
-			os.Exit(1)
-		}
-
-		pvMigrator := PVMigrator{
-			ctx:             context.TODO(),
-			log:             output,
-			k8scli:          clientset,
-			srcSc:           options.SourceSCName,
-			dstSc:           options.DestSCName,
-			deletePVTimeout: 5 * time.Minute,
-			podReadyTimeout: time.Duration(options.PodReadyTimeout) * time.Second,
-		}
-		unsupportedPVCs, err := pvMigrator.ValidateVolumeAccessModes(srcPVs)
-		if err != nil {
-			fmt.Printf("failed to validate volume access modes for destination storage class %s", options.DestSCName)
-			os.Exit(1)
-		}
-
-		if len(unsupportedPVCs) != 0 {
-			PrintPVAccessModeErrors(unsupportedPVCs)
-			fmt.Printf("existing volumes have access modes not supported by the destination storage class %s", options.DestSCName)
-			os.Exit(2)
-		}
-	}
-
-	// start the migration
-	if !dryRun {
-		err = Migrate(context.TODO(), output, clientset, options)
-		if err != nil {
-			fmt.Printf("%s\n", err.Error())
-			os.Exit(1)
-		}
-	}
+	SourceSCName            string
+	DestSCName              string
+	RsyncImage              string
+	Namespace               string
+	SetDefaults             bool
+	VerboseCopy             bool
+	SkipSourceValidation    bool
+	PvcCopyTimeout          int
+	PodReadyTimeout         int
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
@@ -177,7 +99,6 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	return nil
 }
 
-
 type pvcCtx struct {
 	claim     *corev1.PersistentVolumeClaim
 	usedByPod *corev1.Pod
@@ -196,7 +117,6 @@ func (pvc pvcCtx) getNodeNameRef() string {
 	}
 	return pvc.usedByPod.Spec.NodeName
 }
-
 
 // swapDefaultStorageClasses attempts to set newDefaultSC as the default StorageClass
 // if oldDefaultSC was set as the default, then it will be unset first

@@ -8,7 +8,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -107,7 +106,7 @@ func TestPVCSForPVs(t *testing.T) {
 	}
 }
 
-func TestPVSByStorageClass(t *testing.T) {
+func TestPVsByStorageClass(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		err      string
@@ -229,7 +228,7 @@ func TestPVSByStorageClass(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			kcli := fake.NewSimpleClientset(tt.objs...)
-			result, err := PVSByStorageClass(context.Background(), kcli, tt.scname)
+			result, err := PVsByStorageClass(context.Background(), kcli, tt.scname)
 			if err != nil {
 				if len(tt.err) == 0 {
 					t.Errorf("unexpected error: %s", err)

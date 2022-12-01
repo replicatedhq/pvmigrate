@@ -1,16 +1,76 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
+	"log"
+	"os"
 
 	"github.com/replicatedhq/pvmigrate/pkg/migrate"
+	"github.com/replicatedhq/pvmigrate/pkg/preflight"
 	"github.com/replicatedhq/pvmigrate/pkg/version"
+	k8sclient "k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // this allows accessing a larger array of cloud providers
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 func main() {
 	fmt.Printf("Running pvmigrate build:\n")
 	version.Print()
 
-	migrate.Cli()
+	// Cli uses CLI options to run Migrate
+	var options migrate.Options
+	var skipPreflightValidation bool
+	var preflightValidationOnly bool
+	flag.StringVar(&options.SourceSCName, "source-sc", "", "storage provider name to migrate from")
+	flag.StringVar(&options.DestSCName, "dest-sc", "", "storage provider name to migrate to")
+	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
+	flag.StringVar(&options.Namespace, "namespace", "", "only migrate PVCs within this namespace")
+	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
+	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
+	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
+	flag.IntVar(&options.PvcCopyTimeout, "pvc-copy-timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
+	flag.IntVar(&options.PodReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
+	flag.BoolVar(&skipPreflightValidation, "skip-preflight-validation", false, "skip the volume access modes validation on the destination storage provider")
+	flag.BoolVar(&preflightValidationOnly, "preflight-validation-only", false, "skip the migrate and run preflight validation")
+
+	flag.Parse()
+
+	// setup k8s
+	cfg, err := config.GetConfig()
+	if err != nil {
+		fmt.Printf("failed to get config: %s\n", err.Error())
+		os.Exit(1)
+	}
+
+	clientset, err := k8sclient.NewForConfig(cfg)
+	if err != nil {
+		fmt.Printf("failed to create kubernetes clientset: %s\n", err.Error())
+		os.Exit(1)
+	}
+
+	output := log.New(os.Stdout, "", 0) // this has no time prefix etc
+
+	if !skipPreflightValidation {
+		failures, err := preflight.Validate(context.TODO(), output, clientset, options)
+		if err != nil {
+			output.Printf("failed to run preflight validation checks")
+			os.Exit(1)
+		}
+
+		if len(failures) != 0 {
+			preflight.PrintValidationFailures(output.Writer(), failures)
+			os.Exit(2)
+		}
+	}
+
+	// start the migration
+	if !preflightValidationOnly {
+		err = migrate.Migrate(context.TODO(), output, clientset, options)
+		if err != nil {
+			output.Printf("migration failed: %s", err)
+			os.Exit(3)
+		}
+	}
 }

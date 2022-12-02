@@ -3055,7 +3055,7 @@ func Test_copyAllPVCs(t *testing.T) {
 				}
 			}(testCtx, testlog, clientset, tt.events)
 
-			err := copyAllPVCs(testCtx, testlog, clientset, "sourcesc", "destsc", "testrsyncimage", tt.matchingPVCs, false, time.Second*4)
+			err := copyAllPVCs(testCtx, testlog, clientset, "sourcesc", "destsc", "testrsyncimage", tt.matchingPVCs, false, time.Millisecond*10)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("got expected error %q", err.Error())

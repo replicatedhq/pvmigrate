@@ -33,7 +33,7 @@ func main() {
 	flag.IntVar(&options.PvcCopyTimeout, "pvc-copy-timeout", 300, "length of time to wait (in seconds) when transferring data from the source to the destination storage volume")
 	flag.IntVar(&options.PodReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
 	flag.BoolVar(&skipPreflightValidation, "skip-preflight-validation", false, "skip the volume access modes validation on the destination storage provider")
-	flag.BoolVar(&preflightValidationOnly, "preflight-validation-only", false, "skip the migrate and run preflight validation")
+	flag.BoolVar(&preflightValidationOnly, "preflight-validation-only", false, "skip the migration and run preflight validation only")
 
 	flag.Parse()
 

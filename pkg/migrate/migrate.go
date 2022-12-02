@@ -40,15 +40,15 @@ var isDestScLocalVolumeProvisioner bool
 
 // Options is the set of options that should be provided to Migrate
 type Options struct {
-	SourceSCName            string
-	DestSCName              string
-	RsyncImage              string
-	Namespace               string
-	SetDefaults             bool
-	VerboseCopy             bool
-	SkipSourceValidation    bool
-	PvcCopyTimeout          int
-	PodReadyTimeout         int
+	SourceSCName         string
+	DestSCName           string
+	RsyncImage           string
+	Namespace            string
+	SetDefaults          bool
+	VerboseCopy          bool
+	SkipSourceValidation bool
+	PvcCopyTimeout       int
+	PodReadyTimeout      int
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
@@ -68,7 +68,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Duration(options.PvcCopyTimeout)*time.Second)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Second)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]pvcCtx, verboseCopy bool, timeout time.Duration) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]pvcCtx, verboseCopy bool, waitTime time.Duration) error {
 	// create a pod for each PVC migration, and wait for it to finish
 	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
 	for ns, nsPvcs := range matchingPVCs {
@@ -192,10 +192,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			sourcePvcName, destPvcName := nsPvc.claim.Name, newPvcName(nsPvc.claim.Name)
 			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.claim.Spec.VolumeName, destPvcName, ns)
 
-			// setup timeout
-			timeoutCtx, cancelCtx := context.WithTimeout(ctx, timeout)
-			defer cancelCtx()
-			err := copyOnePVC(timeoutCtx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, nsPvc.getNodeNameRef(), timeout)
+			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime, nsPvc.getNodeNameRef())
 			if err != nil {
 				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.claim.Name, ns, err)
 			}
@@ -204,7 +201,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, nodeName string, timeout time.Duration) error {
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration, nodeName string) error {
 	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
 	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage, nodeName)
 	if err != nil {
@@ -220,27 +217,26 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		}
 	}()
 
-	migrationTimeout := time.NewTicker(timeout)
-	waitInterval := time.NewTicker(1 * time.Second)
-	defer migrationTimeout.Stop()
-	defer waitInterval.Stop()
+	// wait for the pod to be created
+	time.Sleep(waitTime)
 	for {
 		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 		if err != nil {
 			w.Printf("failed to get newly created migration pod %s: %v\n", createdPod.Name, err)
-		} else if gotPod.Status.Phase == corev1.PodRunning || gotPod.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
+
+		if gotPod.Status.Phase == corev1.PodPending {
+			time.Sleep(waitTime)
+			continue
+		}
+
+		if gotPod.Status.Phase == corev1.PodRunning || gotPod.Status.Phase == corev1.PodSucceeded {
 			// time to get logs
 			break
 		}
 
 		w.Printf("got status %s for pod %s, this is likely an error\n", gotPod.Status.Phase, gotPod.Name)
-
-		select {
-		case <-waitInterval.C:
-			continue
-		case <-migrationTimeout.C:
-			return fmt.Errorf("migration pod %s failed to go into Running phase: timedout", createdPod.Name)
-		}
 	}
 
 	w.Printf("migrating PVC %s:\n", sourcePvcName)
@@ -259,16 +255,15 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 			gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 			if err != nil {
 				w.Printf("failed to check status of newly created migration pod %s: %v\n", createdPod.Name, err)
-			} else if gotPod.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			if gotPod.Status.Phase != corev1.PodRunning {
 				// if the pod is not running, go to the "validate success" section
 				break
 			}
-		}
-		select {
-		case <-waitInterval.C:
-			continue
-		case <-migrationTimeout.C:
-			return fmt.Errorf("failed to get logs for migration container %s: timedout", pvMigrateContainerName)
+
+			// if the pod is running, wait to see if getting logs works in a few seconds
+			time.Sleep(waitTime)
 		}
 	}
 
@@ -316,12 +311,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 			return fmt.Errorf("logs for the migration pod %s in %s ended, but the status was %s and not succeeded", createdPod.Name, ns, gotPod.Status.Phase)
 		}
 
-		select {
-		case <-waitInterval.C:
-			continue
-		case <-migrationTimeout.C:
-			return fmt.Errorf("could not determine if migration pod %s succeeded: timedout", createdPod.Name)
-		}
+		time.Sleep(waitTime)
 	}
 
 	w.Printf("finished migrating PVC %s\n", sourcePvcName)
@@ -548,6 +538,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	return matchingPVCs, pvcNamespaces, nil
 }
 
+// TODO: move this to the validation package
 func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, skipSourceValidation bool) error {
 	// get storage providers
 	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})

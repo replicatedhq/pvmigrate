@@ -19,6 +19,11 @@ import (
 	k8spodutils "k8s.io/kubernetes/pkg/api/v1/pod"
 )
 
+const (
+	pvcNamePrefix = "pf-pvc"
+	podNamePrefix = "pvmigrate-pf-pod"
+)
+
 type pvcFailure struct {
 	reason  string
 	from    string
@@ -34,12 +39,12 @@ type ValidationFailure struct {
 
 // Validate runs preflight check on storage volumes returning a list of failures
 func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options migrate.Options) ([]ValidationFailure, error) {
-	// validate access modes for all PVCs using the d source storage class
+	// validate access modes for all PVCs using the source storage class
 	pvcs, err := pvcsForStorageClass(ctx, w, clientset, options.SourceSCName, options.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVCs for storage %s: %s", options.SourceSCName, err)
 	}
-	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, time.Duration(options.PodReadyTimeout), pvcs)
+	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, time.Duration(options.PodReadyTimeout), pvcs)
 	if err != nil {
 		return nil, fmt.Errorf("failed validate PVC access modes: %s", err)
 	}
@@ -50,8 +55,8 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 func PrintValidationFailures(stream io.Writer, failures []ValidationFailure) {
 	tw := tabwriter.NewWriter(stream, 0, 8, 8, '\t', 0)
 	fmt.Fprintf(tw, "The following persistent volume claims cannot be migrated:\n\n")
-	fmt.Fprintln(tw, "NAMESPACE\tPVC\tSOURCE\tMESSAGE")
-	fmt.Fprintf(tw, "---------\t---\t------\t-------\n")
+	fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tSOURCE\tMESSAGE")
+	fmt.Fprintf(tw, "---------\t--------\t------\t-------\n")
 	for _, failure := range failures {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", failure.Namespace, failure.Resource, failure.Source, failure.Message)
 	}
@@ -71,7 +76,7 @@ func toValidationFailures(pvcFailures map[string]map[string]pvcFailure) []Valida
 // validateVolumeAccessModes checks whether the provided persistent volumes support the access modes
 // of the destination storage class.
 // returns a map of pvc validation failures indexed by namespace
-func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, podReadyTimeout time.Duration, pvcs map[string]corev1.PersistentVolumeClaim) (map[string]map[string]pvcFailure, error) {
+func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, tmpPodImage string, podReadyTimeout time.Duration, pvcs map[string]corev1.PersistentVolumeClaim) (map[string]map[string]pvcFailure, error) {
 	volAccessModeFailures := make(map[string]map[string]pvcFailure)
 
 	if _, err := client.StorageV1().StorageClasses().Get(ctx, dstSC, metav1.GetOptions{}); err != nil {
@@ -79,7 +84,7 @@ func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8scli
 	}
 
 	for _, pvc := range pvcs {
-		v, err := checkVolumeAccessModes(ctx, l, client, dstSC, pvc, podReadyTimeout)
+		v, err := checkVolumeAccessModes(ctx, l, client, dstSC, pvc, podReadyTimeout, tmpPodImage)
 		if err != nil {
 			l.Printf("failed to check volume access mode for PVC %s: %s", pvc.Name, err)
 			continue
@@ -91,15 +96,15 @@ func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8scli
 	return volAccessModeFailures, nil
 }
 
-// buildPVCConsumerPod creates a pod spec for consuming a pvc
-func buildPVCConsumerPod(pvcName, namespace string) *corev1.Pod {
+// buildTmpPVCConsumerPod creates a pod spec for consuming a pvc
+func buildTmpPVCConsumerPod(pvcName, namespace, image string) *corev1.Pod {
 	return &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      newK8sName("pvmigrate-preflight-pvc-consumer", pvcName),
+			Name:      k8sutil.NewPrefixedName(podNamePrefix, pvcName),
 			Namespace: namespace,
 		},
 		Spec: corev1.PodSpec{
@@ -116,8 +121,8 @@ func buildPVCConsumerPod(pvcName, namespace string) *corev1.Pod {
 			},
 			Containers: []corev1.Container{
 				{
-					Name:  "busybox",
-					Image: "busybox",
+					Name:  "sleep",
+					Image: image,
 					Command: []string{
 						"sleep",
 						"3600",
@@ -138,7 +143,7 @@ func buildPVCConsumerPod(pvcName, namespace string) *corev1.Pod {
 func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      newK8sName("pvmigrate-preflight", pvc.Name),
+			Name:      k8sutil.NewPrefixedName(pvcNamePrefix, pvc.Name),
 			Namespace: pvc.Namespace,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -155,22 +160,30 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 
 // checkVolumeAccessModes checks if the access modes of a pv are supported by the
 // destination storage class.
-func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, pvc corev1.PersistentVolumeClaim, timeout time.Duration) (*pvcFailure, error) {
+func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, pvc corev1.PersistentVolumeClaim, timeout time.Duration, tmpPodImage string) (*pvcFailure, error) {
 	var err error
 
 	// create temp pvc for storage class
-	tmpPVC := buildTmpPVC(pvc, dstSC)
-	if tmpPVC, err = client.CoreV1().PersistentVolumeClaims("default").Create(
-		ctx, tmpPVC, metav1.CreateOptions{},
-	); err != nil {
-		return nil, fmt.Errorf("failed to create temporary pvc: %w", err)
+	tmpPVCSpec := buildTmpPVC(pvc, dstSC)
+	tmpPVC, err := client.CoreV1().PersistentVolumeClaims(tmpPVCSpec.Namespace).Create(
+		ctx, tmpPVCSpec, metav1.CreateOptions{})
+	if err != nil {
+		if !k8serrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("failed to create temporary pvc %s: %w", tmpPVCSpec.Name, err)
+		}
+
+		// PVC exist, get it
+		tmpPVC, err = client.CoreV1().PersistentVolumeClaims(tmpPVCSpec.Namespace).Get(ctx, tmpPVCSpec.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get existing temp PVC %s: %w", tmpPVCSpec.Name, err)
+		}
 	}
 
 	// consume pvc to determine any access mode errors
-	pvcConsumerPodSpec := buildPVCConsumerPod(tmpPVC.Name, tmpPVC.Namespace)
-	pvcConsumerPod, err := client.CoreV1().Pods(pvcConsumerPodSpec.Namespace).Create(ctx, pvcConsumerPodSpec, metav1.CreateOptions{})
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		return nil, err
+	pvcConsumerPodSpec := buildTmpPVCConsumerPod(tmpPVC.Name, tmpPVC.Namespace, tmpPodImage)
+	pvcConsumerPod, err := client.CoreV1().Pods(tmpPVC.Namespace).Create(ctx, pvcConsumerPodSpec, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create validation pod %s: %s", pvcConsumerPodSpec.Name, err)
 	}
 
 	// cleanup pvc and pod at the end
@@ -339,12 +352,4 @@ func pvcsForStorageClass(ctx context.Context, l *log.Logger, client k8sclient.In
 		}
 	}
 	return srcPVCs, nil
-}
-
-func newK8sName(prefix, original string) string {
-	newName := fmt.Sprintf("%s-%s", prefix, original)
-	if len(newName) > 63 {
-		newName = newName[0:31] + newName[len(newName)-32:]
-	}
-	return newName
 }

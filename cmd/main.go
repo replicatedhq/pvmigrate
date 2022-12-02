@@ -61,7 +61,7 @@ func main() {
 
 		if len(failures) != 0 {
 			preflight.PrintValidationFailures(output.Writer(), failures)
-			os.Exit(2)
+			os.Exit(1)
 		}
 	}
 
@@ -70,7 +70,7 @@ func main() {
 		err = migrate.Migrate(context.TODO(), output, clientset, options)
 		if err != nil {
 			output.Printf("migration failed: %s", err)
-			os.Exit(3)
+			os.Exit(1)
 		}
 	}
 }

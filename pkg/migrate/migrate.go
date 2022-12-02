@@ -47,7 +47,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
-	PvcCopyTimeout       int
+	PVCCopyTimeout       int
 	PodReadyTimeout      int
 }
 

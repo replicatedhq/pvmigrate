@@ -18,7 +18,7 @@ func PVsByStorageClass(ctx context.Context, cli kubernetes.Interface, scname str
 
 	allpvs, err := cli.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get persistent volumes: %w", err)
+		return nil, fmt.Errorf("failed to list persistent volumes: %w", err)
 	}
 
 	pvs := map[string]corev1.PersistentVolume{}

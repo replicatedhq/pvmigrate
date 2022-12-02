@@ -42,11 +42,11 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	// validate access modes for all PVCs using the source storage class
 	pvcs, err := pvcsForStorageClass(ctx, w, clientset, options.SourceSCName, options.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PVCs for storage %s: %s", options.SourceSCName, err)
+		return nil, fmt.Errorf("failed to get PVCs for storage %s: %w", options.SourceSCName, err)
 	}
 	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, time.Duration(options.PodReadyTimeout), pvcs)
 	if err != nil {
-		return nil, fmt.Errorf("failed validate PVC access modes: %s", err)
+		return nil, fmt.Errorf("failed to validate PVC access modes: %w", err)
 	}
 	return toValidationFailures(pvcAccesModeFailures), nil
 }
@@ -183,7 +183,7 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 	pvcConsumerPodSpec := buildTmpPVCConsumerPod(tmpPVC.Name, tmpPVC.Namespace, tmpPodImage)
 	pvcConsumerPod, err := client.CoreV1().Pods(tmpPVC.Namespace).Create(ctx, pvcConsumerPodSpec, metav1.CreateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create validation pod %s: %s", pvcConsumerPodSpec.Name, err)
+		return nil, fmt.Errorf("failed to create validation pod %s: %w", pvcConsumerPodSpec.Name, err)
 	}
 
 	// cleanup pvc and pod at the end
@@ -200,7 +200,7 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 	for {
 		gotPod, err := client.CoreV1().Pods(pvcConsumerPodSpec.Namespace).Get(ctx, pvcConsumerPodSpec.Name, metav1.GetOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("failed getting pv consumer pod %s: %w", gotPod.Name, err)
+			return nil, fmt.Errorf("failed to get pv consumer pod %s: %w", gotPod.Name, err)
 		}
 
 		switch {
@@ -217,9 +217,9 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 			// but the pod has not been scheduled yet, nor have container images been pulled from the registry.
 			if gotPod.Status.Phase == corev1.PodPending {
 				// check pvc status and get error
-				pvcPendingError, err := getPvcError(client, tmpPVC)
+				pvcPendingError, err := getPVCError(client, tmpPVC)
 				if err != nil {
-					return nil, fmt.Errorf("failed to get PVC error: %s", err)
+					return nil, fmt.Errorf("failed to get pvc failure: %w", err)
 				}
 				return pvcPendingError, nil
 			}
@@ -263,9 +263,8 @@ func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.Persist
 	}
 	waitFor = append(waitFor, pvc.Name)
 
-	timeout := time.NewTicker(5 * time.Minute)
+	timeout := time.After(5 * time.Minute)
 	interval := time.NewTicker(5 * time.Second)
-	defer timeout.Stop()
 	defer interval.Stop()
 	for _, pvc := range waitFor {
 		pv, ok := pvsByPVCName[pvc]
@@ -287,7 +286,7 @@ func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.Persist
 			select {
 			case <-interval.C:
 				continue
-			case <-timeout.C:
+			case <-timeout:
 				return fmt.Errorf("failed to delete pvs: timeout")
 			}
 		}
@@ -307,8 +306,8 @@ func deletePVConsumerPod(client k8sclient.Interface, pod *corev1.Pod) error {
 	return nil
 }
 
-// getPvcError returns the failure event for why a PVC is in Pending status
-func getPvcError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) (*pvcFailure, error) {
+// getPVCError returns the failure event for why a PVC is in Pending status
+func getPVCError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) (*pvcFailure, error) {
 	// no need to inspect pvc
 	if pvc.Status.Phase != corev1.ClaimPending {
 		return nil, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
@@ -316,7 +315,7 @@ func getPvcError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) 
 
 	pvcEvents, err := client.CoreV1().Events(pvc.Namespace).Search(scheme.Scheme, pvc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list events for PVC %s", pvc.Name)
+		return nil, fmt.Errorf("failed to list events for PVC %s: %w", pvc.Name, err)
 	}
 
 	// get pending reason
@@ -331,9 +330,9 @@ func getPvcError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) 
 // pvcsForStorageClass returns all PersistentVolumeClaims, filtered by namespace, for a given
 // storage class
 func pvcsForStorageClass(ctx context.Context, l *log.Logger, client k8sclient.Interface, srcSC, namespace string) (map[string]corev1.PersistentVolumeClaim, error) {
-	srcPVs, err := k8sutil.PVsByStorageClass(context.TODO(), client, srcSC)
+	srcPVs, err := k8sutil.PVsByStorageClass(ctx, client, srcSC)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PVs for storage class %s: %s", srcSC, err)
+		return nil, fmt.Errorf("failed to get PVs for storage class %s: %w", srcSC, err)
 	}
 
 	// get PVCs using specified PVs

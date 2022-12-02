@@ -620,6 +620,18 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeSpec{
 						StorageClassName: "rook",
 						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc2",
+							Namespace: "test",
+						},
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv2",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "default",
+						ClaimRef: &corev1.ObjectReference{
 							Name:      "pvc1",
 							Namespace: "test",
 						},
@@ -643,6 +655,21 @@ func Test_pvcsForStorageClass(t *testing.T) {
 				&corev1.PersistentVolumeClaim{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "pvc1",
+						Namespace: "test",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: pointer.String("default"),
+						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Mi"),
+							},
+						},
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc2",
 						Namespace: "test",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{

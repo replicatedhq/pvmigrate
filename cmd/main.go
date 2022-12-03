@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 
 	"github.com/replicatedhq/pvmigrate/pkg/migrate"
 	"github.com/replicatedhq/pvmigrate/pkg/preflight"
@@ -16,6 +17,9 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	fmt.Printf("Running pvmigrate build:\n")
 	version.Print()
 
@@ -53,7 +57,7 @@ func main() {
 	}
 
 	if !skipPreflightValidation {
-		failures, err := preflight.Validate(context.TODO(), logger, clientset, options)
+		failures, err := preflight.Validate(ctx, logger, clientset, options)
 		if err != nil {
 			logger.Printf("failed to run preflight validation checks")
 			os.Exit(1)
@@ -67,7 +71,7 @@ func main() {
 
 	// start the migration
 	if !preflightValidationOnly {
-		err = migrate.Migrate(context.TODO(), logger, clientset, options)
+		err = migrate.Migrate(ctx, logger, clientset, options)
 		if err != nil {
 			logger.Printf("migration failed: %s", err)
 			os.Exit(1)

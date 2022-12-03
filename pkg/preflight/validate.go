@@ -188,11 +188,13 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 
 	// cleanup pvc and pod at the end
 	defer func() {
-		if err = deleteTmpPVC(l, client, tmpPVC); err != nil {
-			l.Printf("failed to cleanup tmp claim: %s", err)
-		}
+		// pod must be deleted first then the pvc
 		if err = deletePVConsumerPod(client, pvcConsumerPod); err != nil {
 			l.Printf("failed to cleanup pv consumer pod %s: %s", pvcConsumerPod.Name, err)
+		}
+
+		if err = deleteTmpPVC(l, client, tmpPVC); err != nil {
+			l.Printf("failed to cleanup tmp claim: %s", err)
 		}
 	}()
 

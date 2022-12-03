@@ -54,11 +54,11 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // PrintPVAccessModeErrors prints and formats the volume access mode errors in pvcErrors
 func PrintValidationFailures(stream io.Writer, failures []ValidationFailure) {
 	tw := tabwriter.NewWriter(stream, 0, 8, 8, '\t', 0)
-	fmt.Fprintf(tw, "The following persistent volume claims cannot be migrated:\n\n")
-	fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tSOURCE\tMESSAGE")
-	fmt.Fprintf(tw, "---------\t--------\t------\t-------\n")
+	fmt.Fprintf(tw, "The following resources cannot be migrated:\n\n")
+	fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tMESSAGE")
+	fmt.Fprintf(tw, "---------\t--------\t-------\n")
 	for _, failure := range failures {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", failure.Namespace, failure.Resource, failure.Source, failure.Message)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", failure.Namespace, failure.Resource, failure.Message)
 	}
 	tw.Flush()
 }
@@ -67,7 +67,7 @@ func toValidationFailures(pvcFailures map[string]map[string]pvcFailure) []Valida
 	var vFailures []ValidationFailure
 	for ns, failures := range pvcFailures {
 		for name, pvcFailure := range failures {
-			vFailures = append(vFailures, ValidationFailure{ns, name, pvcFailure.from, pvcFailure.message})
+			vFailures = append(vFailures, ValidationFailure{ns, "pvc/" + name, pvcFailure.from, pvcFailure.message})
 		}
 	}
 	return vFailures

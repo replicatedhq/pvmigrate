@@ -44,7 +44,7 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVCs for storage %s: %w", options.SourceSCName, err)
 	}
-	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, time.Duration(options.PodReadyTimeout), pvcs)
+	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, time.Duration(options.PodReadyTimeout)*time.Second, pvcs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate PVC access modes: %w", err)
 	}
@@ -308,7 +308,7 @@ func deletePVConsumerPod(client k8sclient.Interface, pod *corev1.Pod) error {
 
 // getPVCError returns the failure event for why a PVC is in Pending status
 func getPVCError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) (*pvcFailure, error) {
-	// no need to inspect pvc
+	// no need to inspect pvc if it's NOT in Pending phase
 	if pvc.Status.Phase != corev1.ClaimPending {
 		return nil, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
 	}

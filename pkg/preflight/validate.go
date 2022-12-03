@@ -17,6 +17,8 @@ import (
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	k8spodutils "k8s.io/kubernetes/pkg/api/v1/pod"
+
+	"k8s.io/utils/pointer"
 )
 
 const (
@@ -299,7 +301,7 @@ func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.Persist
 // deletePVConsumerPod removes the pod resource from the api servere
 func deletePVConsumerPod(client k8sclient.Interface, pod *corev1.Pod) error {
 	propagation := metav1.DeletePropagationForeground
-	delopts := metav1.DeleteOptions{PropagationPolicy: &propagation}
+	delopts := metav1.DeleteOptions{GracePeriodSeconds: pointer.Int64(0), PropagationPolicy: &propagation}
 	if pod != nil {
 		if err := client.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, delopts); err != nil {
 			return err

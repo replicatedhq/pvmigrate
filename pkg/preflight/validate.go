@@ -41,12 +41,23 @@ type ValidationFailure struct {
 
 // Validate runs preflight check on storage volumes returning a list of failures
 func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options migrate.Options) ([]ValidationFailure, error) {
+	// validate storage classes
+	scFailures, err := validateStorageClasses(ctx, w, clientset, options.SourceSCName, options.DestSCName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate storage classes: %w", err)
+	}
+
+	// if there are storage class validation failures it doesn't make sense to proceed
+	if scFailures != nil {
+		return scFailures, nil
+	}
+
 	// validate access modes for all PVCs using the source storage class
 	pvcs, err := pvcsForStorageClass(ctx, w, clientset, options.SourceSCName, options.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVCs for storage %s: %w", options.SourceSCName, err)
 	}
-	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, time.Duration(options.PodReadyTimeout)*time.Second, pvcs)
+	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, options.PodReadyTimeout, pvcs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate PVC access modes: %w", err)
 	}
@@ -96,6 +107,34 @@ func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8scli
 		}
 	}
 	return volAccessModeFailures, nil
+}
+
+// validateStorageClasses returns any failures encountered when discovering the source and destination
+// storage classes
+func validateStorageClasses(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string) ([]ValidationFailure, error) {
+	// get storage providers
+	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list storage classes: %w", err)
+	}
+
+	var sourceScFound, destScFound bool
+	var scFailures []ValidationFailure
+	for _, sc := range storageClasses.Items {
+		if sc.Name == sourceSCName {
+			sourceScFound = true
+		}
+		if sc.Name == destSCName {
+			destScFound = true
+		}
+	}
+	if !sourceScFound {
+		scFailures = append(scFailures, ValidationFailure{Resource: "sc/" + sourceSCName, Message: "Resource not found"})
+	}
+	if !destScFound {
+		scFailures = append(scFailures, ValidationFailure{Resource: "sc/" + destSCName, Message: "Resource not found"})
+	}
+	return scFailures, nil
 }
 
 // buildTmpPVCConsumerPod creates a pod spec for consuming a pvc

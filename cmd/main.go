@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/replicatedhq/pvmigrate/pkg/migrate"
 	"github.com/replicatedhq/pvmigrate/pkg/preflight"
@@ -34,7 +35,7 @@ func main() {
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
-	flag.IntVar(&options.PodReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
+	flag.DurationVar(&options.PodReadyTimeout, "pod-ready-timeout", 60*time.Second, "length of time to wait (in seconds) for volume validation pod(s) to go into Ready phase")
 	flag.BoolVar(&skipPreflightValidation, "skip-preflight-validation", false, "skip the volume access modes validation on the destination storage provider")
 	flag.BoolVar(&preflightValidationOnly, "preflight-validation-only", false, "skip the migration and run preflight validation only")
 

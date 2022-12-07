@@ -47,7 +47,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
-	PodReadyTimeout      int
+	PodReadyTimeout      time.Duration
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
@@ -537,7 +537,6 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	return matchingPVCs, pvcNamespaces, nil
 }
 
-// TODO: move this to the validation package
 func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, skipSourceValidation bool) error {
 	// get storage providers
 	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})

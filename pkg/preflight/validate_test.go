@@ -868,3 +868,81 @@ func Test_pvcsForStorageClass(t *testing.T) {
 		})
 	}
 }
+
+func Test_validateStorageClasses(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		resources []runtime.Object
+		sourceSC  string
+		destSC    string
+		wantErr   bool
+		expected  []ValidationFailure
+	}{
+		{
+			name:     "When both StorageClasses exist and are distinct expect no failures",
+			sourceSC: "sourcesc",
+			destSC:   "destsc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcesc",
+					},
+				},
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "destsc",
+					},
+				},
+			},
+		},
+		{
+			name:     "When source storage class does not exist expect validation failure",
+			sourceSC: "sourcesc",
+			destSC:   "destsc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "destsc",
+					},
+				},
+			},
+			expected: []ValidationFailure{
+				{
+					Resource: "sc/sourcesc",
+					Message:  "Resource not found",
+				},
+			},
+		},
+		{
+			name:     "When destination storage class does not exist expect validation failure",
+			sourceSC: "sourcesc",
+			destSC:   "destsc",
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcesc",
+					},
+				},
+			},
+			expected: []ValidationFailure{
+				{
+					Resource: "sc/destsc",
+					Message:  "Resource not found",
+				},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			clientset := fake.NewSimpleClientset(tt.resources...)
+			logger := log.New(io.Discard, "", 0)
+			result, err := validateStorageClasses(context.Background(), logger, clientset, tt.sourceSC, tt.destSC)
+			if !tt.wantErr {
+				req.NoError(err)
+			} else {
+				req.Error(err)
+			}
+			req.Equal(result, tt.expected)
+		})
+	}
+}

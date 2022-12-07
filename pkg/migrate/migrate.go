@@ -578,6 +578,7 @@ const nameSuffix = "-pvcmigrate"
 // pruning from the end runs the risk of dropping the '0'/'1'/etc of a statefulset's PVC name
 // pruning from the front runs the risk of making a-replica-... and b-replica-... collide
 // so this removes characters from the middle of the string
+// TODO: refactor to k8sutil package
 func newPvcName(originalName string) string {
 	candidate := originalName + nameSuffix
 	if len(candidate) <= 63 {

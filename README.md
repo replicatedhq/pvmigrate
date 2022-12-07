@@ -5,7 +5,7 @@ PVCs to refer to the new PVs.
 
 ## Preflight Validation
 
-`pvmigrate` can perform preflight migration validation to catch any potential failures prior to the migration. 
+`pvmigrate` will run preflight migration validation to catch any potential failures prior to the migration. 
 
 Currently supported validations are: 
 - Checking for existence of storage classes

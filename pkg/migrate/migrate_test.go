@@ -1389,7 +1389,7 @@ func Test_swapPVs(t *testing.T) {
 						Annotations: map[string]string{
 							desiredReclaimAnnotation: "Delete",
 							sourceNsAnnotation:       "testns",
-							sourcePvcAnnotation:      "sourcepvc",
+							sourcePVCAnnotation:      "sourcepvc",
 							"testannotation":         "dest-pv",
 						},
 					},

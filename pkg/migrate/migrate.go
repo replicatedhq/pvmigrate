@@ -24,7 +24,7 @@ const (
 	scaleAnnotation          = baseAnnotation + "-scale"
 	kindAnnotation           = baseAnnotation + "-kind"
 	sourceNsAnnotation       = baseAnnotation + "-sourcens"
-	sourcePvcAnnotation      = baseAnnotation + "-sourcepvc"
+	sourcePVCAnnotation      = baseAnnotation + "-sourcepvc"
 	desiredReclaimAnnotation = baseAnnotation + "-reclaim"
 )
 
@@ -957,7 +957,7 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	err = mutatePV(ctx, w, clientset, migratedPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 		// add annotations describing what PVC this data came from in case of a failure later
 		volume.Annotations[sourceNsAnnotation] = ns
-		volume.Annotations[sourcePvcAnnotation] = pvcName
+		volume.Annotations[sourcePVCAnnotation] = pvcName
 
 		// this will be used to set the reclaim policy after attaching a new PVC
 		volume.Annotations[desiredReclaimAnnotation] = string(originalReclaim)

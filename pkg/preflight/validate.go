@@ -42,7 +42,7 @@ type ValidationFailure struct {
 // Validate runs preflight check on storage volumes returning a list of failures
 func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options migrate.Options) ([]ValidationFailure, error) {
 	// validate storage classes
-	scFailures, err := validateStorageClasses(ctx, w, clientset, options.SourceSCName, options.DestSCName)
+	scFailures, err := validateStorageClasses(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.SkipSourceValidation)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate storage classes: %w", err)
 	}
@@ -111,7 +111,7 @@ func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8scli
 
 // validateStorageClasses returns any failures encountered when discovering the source and destination
 // storage classes
-func validateStorageClasses(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string) ([]ValidationFailure, error) {
+func validateStorageClasses(ctx context.Context, l *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, skipSourceValidation bool) ([]ValidationFailure, error) {
 	// get storage providers
 	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -129,7 +129,11 @@ func validateStorageClasses(ctx context.Context, l *log.Logger, clientset k8scli
 		}
 	}
 	if !sourceScFound {
-		scFailures = append(scFailures, ValidationFailure{Resource: "sc/" + sourceSCName, Message: "Resource not found"})
+		if skipSourceValidation {
+			l.Printf("Warning: unable to find source Storage Class %s, but continuing anyways", sourceSCName)
+		} else {
+			scFailures = append(scFailures, ValidationFailure{Resource: "sc/" + sourceSCName, Message: "Resource not found"})
+		}
 	}
 	if !destScFound {
 		scFailures = append(scFailures, ValidationFailure{Resource: "sc/" + destSCName, Message: "Resource not found"})

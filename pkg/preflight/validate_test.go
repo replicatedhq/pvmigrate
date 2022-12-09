@@ -871,12 +871,13 @@ func Test_pvcsForStorageClass(t *testing.T) {
 
 func Test_validateStorageClasses(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		resources []runtime.Object
-		sourceSC  string
-		destSC    string
-		wantErr   bool
-		expected  []ValidationFailure
+		name                   string
+		resources              []runtime.Object
+		sourceSC               string
+		destSC                 string
+		wantErr                bool
+		expected               []ValidationFailure
+		skipSourceSCValidation bool
 	}{
 		{
 			name:     "When both StorageClasses exist and are distinct expect no failures",
@@ -931,18 +932,31 @@ func Test_validateStorageClasses(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:                   "When source storage class does not exist and skip storage class validation is enabled expect no failure",
+			sourceSC:               "sourcesc",
+			destSC:                 "destsc",
+			skipSourceSCValidation: true,
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "destsc",
+					},
+				},
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
-			result, err := validateStorageClasses(context.Background(), logger, clientset, tt.sourceSC, tt.destSC)
+			result, err := validateStorageClasses(context.Background(), logger, clientset, tt.sourceSC, tt.destSC, tt.skipSourceSCValidation)
 			if !tt.wantErr {
 				req.NoError(err)
 			} else {
 				req.Error(err)
 			}
-			req.Equal(result, tt.expected)
+			req.Equal(tt.expected, result)
 		})
 	}
 }

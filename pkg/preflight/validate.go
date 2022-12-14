@@ -310,7 +310,7 @@ func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.Persist
 
 	pv, ok := pvsByPVCName[pvc.Name]
 	if !ok {
-		l.Printf("failed to find pv for temp pvc %s", pvc)
+		l.Printf("failed to find pv for temp pvc %s", pvc.Name)
 		return nil
 	}
 

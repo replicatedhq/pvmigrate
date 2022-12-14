@@ -57,7 +57,7 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVCs for storage %s: %w", options.SourceSCName, err)
 	}
-	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, options.PodReadyTimeout, pvcs)
+	pvcAccesModeFailures, err := validateVolumeAccessModes(ctx, w, clientset, options.DestSCName, options.RsyncImage, options.PodReadyTimeout, options.DeletePVTimeout, pvcs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate PVC access modes: %w", err)
 	}
@@ -89,7 +89,7 @@ func toValidationFailures(pvcFailures map[string]map[string]pvcFailure) []Valida
 // validateVolumeAccessModes checks whether the provided persistent volumes support the access modes
 // of the destination storage class.
 // returns a map of pvc validation failures indexed by namespace
-func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, tmpPodImage string, podReadyTimeout time.Duration, pvcs map[string]corev1.PersistentVolumeClaim) (map[string]map[string]pvcFailure, error) {
+func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, tmpPodImage string, podReadyTimeout, deletePVTimeout time.Duration, pvcs map[string]corev1.PersistentVolumeClaim) (map[string]map[string]pvcFailure, error) {
 	volAccessModeFailures := make(map[string]map[string]pvcFailure)
 
 	if _, err := client.StorageV1().StorageClasses().Get(ctx, dstSC, metav1.GetOptions{}); err != nil {
@@ -97,7 +97,7 @@ func validateVolumeAccessModes(ctx context.Context, l *log.Logger, client k8scli
 	}
 
 	for _, pvc := range pvcs {
-		v, err := checkVolumeAccessModes(ctx, l, client, dstSC, pvc, podReadyTimeout, tmpPodImage)
+		v, err := checkVolumeAccessModes(ctx, l, client, dstSC, pvc, podReadyTimeout, deletePVTimeout, tmpPodImage)
 		if err != nil {
 			l.Printf("failed to check volume access mode for PVC %s: %s", pvc.Name, err)
 			continue
@@ -205,7 +205,7 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 
 // checkVolumeAccessModes checks if the access modes of a pv are supported by the
 // destination storage class.
-func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, pvc corev1.PersistentVolumeClaim, timeout time.Duration, tmpPodImage string) (*pvcFailure, error) {
+func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient.Interface, dstSC string, pvc corev1.PersistentVolumeClaim, timeout, deletePVTimeout time.Duration, tmpPodImage string) (*pvcFailure, error) {
 	var err error
 
 	// create temp pvc for storage class
@@ -238,7 +238,7 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 			l.Printf("failed to cleanup pv consumer pod %s: %s", pvcConsumerPod.Name, err)
 		}
 
-		if err = deleteTmpPVC(l, client, tmpPVC); err != nil {
+		if err = deleteTmpPVC(l, client, tmpPVC, deletePVTimeout); err != nil {
 			l.Printf("failed to cleanup tmp claim: %s", err)
 		}
 	}()
@@ -280,7 +280,7 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 // backing pv dissapear as well (this is mandatory so we don't leave any orphan pv as this would
 // cause pvmigrate to fail). this function has a timeout of 5 minutes, after that an error is
 // returned.
-func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) error {
+func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim, deleteTimeout time.Duration) error {
 	// Cleanup should use background context so as not to fail if context has already been canceled
 	ctx := context.Background()
 
@@ -291,13 +291,12 @@ func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.Persist
 
 	pvsByPVCName := map[string]corev1.PersistentVolume{}
 	for _, pv := range pvs.Items {
-		if pv.Spec.ClaimRef == nil {
+		if pv.Spec.ClaimRef == nil || pv.Spec.ClaimRef.Namespace != pvc.Namespace {
 			continue
 		}
 		pvsByPVCName[pv.Spec.ClaimRef.Name] = pv
 	}
 
-	var waitFor []string
 	propagation := metav1.DeletePropagationForeground
 	delopts := metav1.DeleteOptions{PropagationPolicy: &propagation}
 	if err := client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Delete(
@@ -308,34 +307,31 @@ func deleteTmpPVC(l *log.Logger, client k8sclient.Interface, pvc *corev1.Persist
 			return err
 		}
 	}
-	waitFor = append(waitFor, pvc.Name)
 
-	timeout := time.After(5 * time.Minute)
+	pv, ok := pvsByPVCName[pvc.Name]
+	if !ok {
+		l.Printf("failed to find pv for temp pvc %s", pvc)
+		return nil
+	}
+
+	timeout := time.After(deleteTimeout)
 	interval := time.NewTicker(5 * time.Second)
 	defer interval.Stop()
-	for _, pvc := range waitFor {
-		pv, ok := pvsByPVCName[pvc]
-		if !ok {
-			l.Printf("failed to find pv for temp pvc %s", pvc)
-			continue
+	for {
+		// break the loop as soon as we can't find the pv anymore.
+		if _, err := client.CoreV1().PersistentVolumes().Get(
+			ctx, pv.Name, metav1.GetOptions{},
+		); err != nil && !k8serrors.IsNotFound(err) {
+			l.Printf("failed to get pv for temp pvc %s: %s", pvc, err)
+		} else if err != nil && k8serrors.IsNotFound(err) {
+			break
 		}
 
-		for {
-			// break the loop as soon as we can't find the pv anymore.
-			if _, err := client.CoreV1().PersistentVolumes().Get(
-				ctx, pv.Name, metav1.GetOptions{},
-			); err != nil && !k8serrors.IsNotFound(err) {
-				l.Printf("failed to get pv for temp pvc %s: %s", pvc, err)
-			} else if err != nil && k8serrors.IsNotFound(err) {
-				break
-			}
-
-			select {
-			case <-interval.C:
-				continue
-			case <-timeout:
-				return fmt.Errorf("failed to delete pvs: timeout")
-			}
+		select {
+		case <-interval.C:
+			continue
+		case <-timeout:
+			return fmt.Errorf("failed to delete pvs: timeout")
 		}
 	}
 	return nil

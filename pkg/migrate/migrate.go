@@ -48,6 +48,7 @@ type Options struct {
 	VerboseCopy          bool
 	SkipSourceValidation bool
 	PodReadyTimeout      time.Duration
+	DeletePVTimeout      time.Duration
 }
 
 // Migrate moves data and PVCs from one StorageClass to another

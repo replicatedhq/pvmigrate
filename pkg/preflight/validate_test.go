@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"os"
 	"testing"
 	"time"
 
@@ -24,13 +23,15 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 		name            string
 		dstSC           string
 		podReadyTimeout time.Duration
+		deletePVTimeout time.Duration
 		wantErr         bool
 		resources       []runtime.Object
 		input           map[string]corev1.PersistentVolumeClaim
 		expected        map[string]map[string]pvcFailure
 	}{
 		{
-			name: "With compatible access modes, expect no validation failures",
+			name:            "With compatible access modes, expect no validation failures",
+			deletePVTimeout: time.Second,
 			input: map[string]corev1.PersistentVolumeClaim{
 				"pvc0": {
 					ObjectMeta: metav1.ObjectMeta{
@@ -95,9 +96,10 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 			},
 		},
 		{
-			name:    "When destination storage class is not found, expect error",
-			wantErr: true,
-			dstSC:   "dstSc",
+			name:            "When destination storage class is not found, expect error",
+			deletePVTimeout: time.Second,
+			wantErr:         true,
+			dstSC:           "dstSc",
 			resources: []runtime.Object{
 				&storagev1.StorageClass{
 					ObjectMeta: metav1.ObjectMeta{
@@ -111,7 +113,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 			req := require.New(t)
 			kcli := fake.NewSimpleClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
-			result, err := validateVolumeAccessModes(context.Background(), logger, kcli, tt.dstSC, "eeacms/rsync:2.3", tt.podReadyTimeout, tt.input)
+			result, err := validateVolumeAccessModes(context.Background(), logger, kcli, tt.dstSC, "eeacms/rsync:2.3", tt.podReadyTimeout, tt.deletePVTimeout, tt.input)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -318,7 +320,8 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 		backgroundFunc  func(context.Context, *log.Logger, k8sclient.Interface, string, string, string)
 	}{
 		{
-			name: "When the PVC access mode is not supported by destination storage provider expect PVC failure",
+			name:            "When the PVC access mode is not supported by destination storage provider expect PVC failure",
+			deletePVTimeout: time.Second,
 			input: &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "testpvc",
@@ -429,12 +432,11 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
 			kcli := fake.NewSimpleClientset(tt.resources...)
-			// logger := log.New(io.Discard, "", 0)
-			logger := log.New(os.Stdout, "", 0)
+			logger := log.New(io.Discard, "", 0)
 			if tt.backgroundFunc != nil {
 				go tt.backgroundFunc(testCtx, logger, kcli, tt.tmpPodName, "default", "pv-for-pf-pvc-testpvc")
 			}
-			result, err := checkVolumeAccessModes(context.Background(), logger, kcli, tt.dstStorageClass, *tt.input, tt.podTimeout, "eeacms/rsync:2.3")
+			result, err := checkVolumeAccessModes(context.Background(), logger, kcli, tt.dstStorageClass, *tt.input, tt.podTimeout, tt.deletePVTimeout, "eeacms/rsync:2.3")
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -957,6 +959,228 @@ func Test_validateStorageClasses(t *testing.T) {
 				req.Error(err)
 			}
 			req.Equal(tt.expected, result)
+		})
+	}
+}
+
+func Test_deleteTmpPVCs(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		resources      []runtime.Object
+		timeout        time.Duration
+		pvc            *corev1.PersistentVolumeClaim
+		wantErr        bool
+		backgroundFunc func(*testing.T, k8sclient.Interface)
+	}{
+		{
+			name:    "When deleting non existing pvc expect success",
+			timeout: time.Second,
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "i-do-not-exist",
+					Namespace: "default",
+				},
+			},
+		},
+		{
+			name:    "When a pv has nil claim ref expect success",
+			timeout: time.Second,
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pvc",
+						Namespace: "default",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-pv",
+					},
+				},
+			},
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+				},
+			},
+		},
+		{
+			name:    "When a pv has a claim ref to a different pvc expect success",
+			timeout: time.Second,
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pvc",
+						Namespace: "default",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "abc",
+							Namespace: "default",
+						},
+					},
+				},
+			},
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: "default",
+				},
+			},
+		},
+		{
+			name:    "When a pv takes while to be purged expect suceess",
+			timeout: 20 * time.Second,
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc",
+						Namespace: "default",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc",
+							Namespace: "default",
+						},
+					},
+				},
+			},
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+				},
+			},
+			backgroundFunc: func(t *testing.T, kcli k8sclient.Interface) {
+				time.Sleep(6 * time.Second)
+				if err := kcli.CoreV1().PersistentVolumes().Delete(
+					context.Background(), "pv", metav1.DeleteOptions{},
+				); err != nil {
+					t.Errorf("failed to delete test pv: %s", err)
+				}
+			},
+		},
+		{
+			name:    "When a pv is not purged expect error (timeout)",
+			timeout: 10 * time.Second,
+			wantErr: true,
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc",
+						Namespace: "default",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc",
+							Namespace: "default",
+						},
+					},
+				},
+			},
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+				},
+			},
+		},
+		{
+			name:    "When pv has a claim ref to a pvc from a different namespaces expect success",
+			timeout: 20 * time.Second,
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc",
+						Namespace: "default",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc",
+							Namespace: "default",
+						},
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "another-pv",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc",
+							Namespace: "different-namespace",
+						},
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "yet-another-pv",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc",
+							Namespace: "yet-another-different-namespace",
+						},
+					},
+				},
+			},
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc",
+					Namespace: "default",
+				},
+			},
+			backgroundFunc: func(t *testing.T, kcli k8sclient.Interface) {
+				time.Sleep(6 * time.Second)
+				if err := kcli.CoreV1().PersistentVolumes().Delete(
+					context.Background(), "pv", metav1.DeleteOptions{},
+				); err != nil {
+					t.Errorf("failed to delete test pv: %s", err)
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			clientset := fake.NewSimpleClientset(tt.resources...)
+			logger := log.New(io.Discard, "", 0)
+
+			if tt.backgroundFunc != nil {
+				go tt.backgroundFunc(t, clientset)
+			}
+
+			err := deleteTmpPVC(logger, clientset, tt.pvc, tt.timeout)
+			if err != nil {
+				if tt.wantErr {
+					req.Error(err)
+					return
+				}
+			}
+
+			if tt.wantErr {
+				req.Fail("Expecting error but received nil instead")
+			}
 		})
 	}
 }

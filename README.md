@@ -39,6 +39,7 @@ pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-on
 | --preflight-validation-only | Bool | | false | skip the migration and run preflight validation only |
 | --skip-preflight-validation | Bool | | false | skip preflight migration validation on the destination storage provider |
 | --pod-ready-timeout | time.Duration | | 60 seconds | length of time to wait (in seconds) for validation pod(s) to go into Ready phase |
+| --delete-pv-timeout | time.Duration | | 5 minutes | length of time to wait (in seconds) for backing PV to be removed when the temporary PVC is deleted |
 
 ## Process
 

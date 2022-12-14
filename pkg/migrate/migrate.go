@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -19,15 +17,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
-const baseAnnotation = "kurl.sh/pvcmigrate"
-const scaleAnnotation = baseAnnotation + "-scale"
-const kindAnnotation = baseAnnotation + "-kind"
-const sourceNsAnnotation = baseAnnotation + "-sourcens"
-const sourcePvcAnnotation = baseAnnotation + "-sourcepvc"
-const desiredReclaimAnnotation = baseAnnotation + "-reclaim"
+const (
+	baseAnnotation           = "kurl.sh/pvcmigrate"
+	scaleAnnotation          = baseAnnotation + "-scale"
+	kindAnnotation           = baseAnnotation + "-kind"
+	sourceNsAnnotation       = baseAnnotation + "-sourcens"
+	sourcePVCAnnotation      = baseAnnotation + "-sourcepvc"
+	desiredReclaimAnnotation = baseAnnotation + "-reclaim"
+)
 
 // IsDefaultStorageClassAnnotation - this is also exported by https://github.com/kubernetes/kubernetes/blob/v1.21.3/pkg/apis/storage/v1/util/helpers.go#L25
 // but that would require adding the k8s import overrides to our go.mod
@@ -48,42 +47,8 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	SkipSourceValidation bool
-}
-
-// Cli uses CLI options to run Migrate
-func Cli() {
-	var options Options
-
-	flag.StringVar(&options.SourceSCName, "source-sc", "", "storage provider name to migrate from")
-	flag.StringVar(&options.DestSCName, "dest-sc", "", "storage provider name to migrate to")
-	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
-	flag.StringVar(&options.Namespace, "namespace", "", "only migrate PVCs within this namespace")
-	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
-	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
-	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
-
-	flag.Parse()
-
-	// setup k8s
-	cfg, err := config.GetConfig()
-	if err != nil {
-		fmt.Printf("failed to get config: %s\n", err.Error())
-		os.Exit(1)
-	}
-
-	clientset, err := k8sclient.NewForConfig(cfg)
-	if err != nil {
-		fmt.Printf("failed to create kubernetes clientset: %s\n", err.Error())
-		os.Exit(1)
-	}
-
-	output := log.New(os.Stdout, "", 0) // this has no time prefix etc
-
-	err = Migrate(context.TODO(), output, clientset, options)
-	if err != nil {
-		fmt.Printf("%s\n", err.Error())
-		os.Exit(1)
-	}
+	PodReadyTimeout      time.Duration
+	DeletePVTimeout      time.Duration
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
@@ -137,6 +102,13 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 type pvcCtx struct {
 	claim     *corev1.PersistentVolumeClaim
 	usedByPod *corev1.Pod
+}
+
+func (p *pvcCtx) Copy() *pvcCtx {
+	return &pvcCtx{
+		p.claim.DeepCopy(),
+		p.usedByPod.DeepCopy(),
+	}
 }
 
 func (pvc pvcCtx) getNodeNameRef() string {
@@ -285,13 +257,12 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 				w.Printf("failed to check status of newly created migration pod %s: %v\n", createdPod.Name, err)
 				continue
 			}
-
 			if gotPod.Status.Phase != corev1.PodRunning {
 				// if the pod is not running, go to the "validate success" section
 				break
 			}
 
-			//if the pod is running, wait to see if getting logs works in a few seconds
+			// if the pod is running, wait to see if getting logs works in a few seconds
 			time.Sleep(waitTime)
 		}
 	}
@@ -348,7 +319,6 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 }
 
 func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string) (*corev1.Pod, error) {
-
 	// apply nodeAffinity when migrating to a local volume provisioner
 	var nodeAffinity *corev1.Affinity
 	if isDestScLocalVolumeProvisioner && nodeName != "" {
@@ -435,7 +405,6 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 	}, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pod to migrate PVC %s to %s in %s: %w", sourcePvcName, destPvcName, ns, err)
-
 	}
 	return createdPod, nil
 }
@@ -610,6 +579,7 @@ const nameSuffix = "-pvcmigrate"
 // pruning from the end runs the risk of dropping the '0'/'1'/etc of a statefulset's PVC name
 // pruning from the front runs the risk of making a-replica-... and b-replica-... collide
 // so this removes characters from the middle of the string
+// TODO: refactor to k8sutil package
 func newPvcName(originalName string) string {
 	candidate := originalName + nameSuffix
 	if len(candidate) <= 63 {
@@ -709,7 +679,6 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
 // It returns a map of namespace to PVCs and any errors encountered.
 func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]pvcCtx, checkInterval time.Duration) (map[string][]pvcCtx, error) {
-
 	// build new map with complete pvcCtx
 	updatedPVCs := matchingPVCs
 
@@ -808,11 +777,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					ss.Spec.Replicas = &int320
 
 					// add an annotation with the current scale (if it does not already exist)
-					if ss.ObjectMeta.Annotations == nil {
-						ss.ObjectMeta.Annotations = map[string]string{}
+					if ss.Annotations == nil {
+						ss.Annotations = map[string]string{}
 					}
-					if _, ok := ss.ObjectMeta.Annotations[scaleAnnotation]; !ok {
-						ss.ObjectMeta.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
+					if _, ok := ss.Annotations[scaleAnnotation]; !ok {
+						ss.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
 					}
 
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
@@ -846,11 +815,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					dep.Spec.Replicas = &int320
 
 					// add an annotation with the current scale (if it does not already exist)
-					if dep.ObjectMeta.Annotations == nil {
-						dep.ObjectMeta.Annotations = map[string]string{}
+					if dep.Annotations == nil {
+						dep.Annotations = map[string]string{}
 					}
-					if _, ok := dep.ObjectMeta.Annotations[scaleAnnotation]; !ok {
-						dep.ObjectMeta.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
+					if _, ok := dep.Annotations[scaleAnnotation]; !ok {
+						dep.Annotations[scaleAnnotation] = fmt.Sprintf("%d", formerScale)
 					}
 
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
@@ -910,12 +879,12 @@ func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			return fmt.Errorf("failed to get statefulsets in %s: %w", ns, err)
 		}
 		for _, ss := range sses.Items {
-			if desiredScale, ok := ss.ObjectMeta.Annotations[scaleAnnotation]; ok {
+			if desiredScale, ok := ss.Annotations[scaleAnnotation]; ok {
 				desiredScaleInt, err := strconv.Atoi(desiredScale)
 				if err != nil {
 					return fmt.Errorf("failed to parse scale %q for StatefulSet %s in %s: %w", desiredScale, ss.Name, ns, err)
 				}
-				delete(ss.ObjectMeta.Annotations, scaleAnnotation)
+				delete(ss.Annotations, scaleAnnotation)
 				desiredScaleInt32 := int32(desiredScaleInt)
 				ss.Spec.Replicas = &desiredScaleInt32
 
@@ -934,12 +903,12 @@ func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 			return fmt.Errorf("failed to get deployments in %s: %w", ns, err)
 		}
 		for _, dep := range deps.Items {
-			if desiredScale, ok := dep.ObjectMeta.Annotations[scaleAnnotation]; ok {
+			if desiredScale, ok := dep.Annotations[scaleAnnotation]; ok {
 				desiredScaleInt, err := strconv.Atoi(desiredScale)
 				if err != nil {
 					return fmt.Errorf("failed to parse scale %q for Deployment %s in %s: %w", desiredScale, dep.Name, ns, err)
 				}
-				delete(dep.ObjectMeta.Annotations, scaleAnnotation)
+				delete(dep.Annotations, scaleAnnotation)
 				desiredScaleInt32 := int32(desiredScaleInt)
 				dep.Spec.Replicas = &desiredScaleInt32
 
@@ -989,7 +958,7 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	err = mutatePV(ctx, w, clientset, migratedPVC.Spec.VolumeName, func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
 		// add annotations describing what PVC this data came from in case of a failure later
 		volume.Annotations[sourceNsAnnotation] = ns
-		volume.Annotations[sourcePvcAnnotation] = pvcName
+		volume.Annotations[sourcePVCAnnotation] = pvcName
 
 		// this will be used to set the reclaim policy after attaching a new PVC
 		volume.Annotations[desiredReclaimAnnotation] = string(originalReclaim)

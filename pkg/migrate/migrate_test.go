@@ -349,7 +349,6 @@ func TestValidateStorageClasses(t *testing.T) {
 			} else {
 				req.Error(err)
 			}
-
 		})
 	}
 }
@@ -782,7 +781,6 @@ func TestGetPVCs(t *testing.T) {
 				require.NoError(t, err)
 				require.Equalf(t, dscString, *pvc2.Spec.StorageClassName, "storage class name was %q not dsc", *pvc2.Spec.StorageClassName)
 				require.Equalf(t, "1Gi", pvc2.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc2.Spec.Resources.Requests.Storage().String())
-
 			},
 			originalPVCs: map[string][]pvcCtx{
 				"ns1": {
@@ -884,7 +882,6 @@ func TestGetPVCs(t *testing.T) {
 				pvc2, err := clientset.CoreV1().PersistentVolumeClaims("ns2").Get(context.TODO(), "pvc2", metav1.GetOptions{})
 				require.NoError(t, err)
 				require.Equalf(t, "sc1", *pvc2.Spec.StorageClassName, "storage class name was %q not sc1", *pvc2.Spec.StorageClassName)
-
 			},
 			originalPVCs: map[string][]pvcCtx{
 				"ns1": {
@@ -1392,7 +1389,7 @@ func Test_swapPVs(t *testing.T) {
 						Annotations: map[string]string{
 							desiredReclaimAnnotation: "Delete",
 							sourceNsAnnotation:       "testns",
-							sourcePvcAnnotation:      "sourcepvc",
+							sourcePVCAnnotation:      "sourcepvc",
 							"testannotation":         "dest-pv",
 						},
 					},

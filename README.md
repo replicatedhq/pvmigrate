@@ -3,12 +3,26 @@
 pvmigrate allows migrating PVCs between two StorageClasses by creating new PVs, copying over the data, and then changing
 PVCs to refer to the new PVs.
 
+## Preflight Validation
+
+`pvmigrate` will run preflight migration validation to catch any potential failures prior to the migration. 
+
+Currently supported validations are: 
+- Checking for existence of storage classes
+- Checking existing PVC access modes are supported on the destination storage provider
+
 ## Examples
 
 To migrate PVs from the 'default' StorageClass to mynewsc:
 
 ```bash
-pvmigrate --source-sc default --dest-sc mynewsc
+pvmigrate --source-sc "default" --dest-sc "mynewsc"
+```
+
+To run preflight migration validation without actually running the migration operation:
+
+```bash
+pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-only
 ```
 
 ## Flags
@@ -22,6 +36,10 @@ pvmigrate --source-sc default --dest-sc mynewsc
 | --set-defaults           | Bool   |          | false            | change default storage class from source to dest                                                 |
 | --verbose-copy           | Bool   |          | false            | show output from the rsync command used to copy data between PVCs                                |
 | --skip-source-validation | Bool   |          | false            | migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist |
+| --preflight-validation-only | Bool | | false | skip the migration and run preflight validation only |
+| --skip-preflight-validation | Bool | | false | skip preflight migration validation on the destination storage provider |
+| --pod-ready-timeout | time.Duration | | 60 seconds | length of time to wait (in seconds) for validation pod(s) to go into Ready phase |
+| --delete-pv-timeout | time.Duration | | 5 minutes | length of time to wait (in seconds) for backing PV to be removed when the temporary PVC is deleted |
 
 ## Process
 

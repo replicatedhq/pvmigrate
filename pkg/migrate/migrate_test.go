@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -3135,9 +3134,8 @@ func Test_readLineWithTimeout(t *testing.T) {
 				return
 			}
 
-			if !reflect.DeepEqual(line, tt.output) {
-				t.Errorf("expected %s, received %s", string(tt.output), string(line))
-			}
+			req := require.New(t)
+			req.Equal(line, tt.output, "expected %q, received %q", string(tt.output), string(line))
 		})
 	}
 }

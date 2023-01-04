@@ -3118,23 +3118,14 @@ func Test_readLineWithTimeout(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
 			var reader = &mockReader{fn: tt.fn}
 			line, err := readLineWithTimeout(reader, tt.timeout)
-			if err != nil {
-				if len(tt.err) == 0 {
-					t.Errorf("unexpected error: %s", err)
-				} else if !strings.Contains(err.Error(), tt.err) {
-					t.Errorf("expecting %q, %q received instead", tt.err, err)
-				}
-				return
+			if len(tt.err) == 0 {
+				req.NoError(err, "unexpected error %v", err)
+			} else {
+				req.ErrorContains(err, tt.err)
 			}
-
-			if len(tt.err) > 0 {
-				t.Errorf("expecting error %q, nil received instead", tt.err)
-				return
-			}
-
-			req := require.New(t)
 			req.Equal(line, tt.output, "expected %q, received %q", string(tt.output), string(line))
 		})
 	}

@@ -273,7 +273,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 			if bufPodLogs == nil {
 				continue
 			}
-			line, _, err := bufPodLogs.ReadLine()
+			line, err := readLineWithTimeout(bufPodLogs, 30*time.Minute)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -1114,4 +1114,32 @@ func resetReclaimPolicy(ctx context.Context, w *log.Logger, clientset k8sclient.
 	}
 
 	return nil
+}
+
+// LineReader is a helper so we can easily implement tests using concrete implementations. This is
+// implemented by bufio.Reader type and that is the type we are targeting here.
+type LineReader interface {
+	ReadLine() ([]byte, bool, error)
+}
+
+// readLineWithTimeout attempts to read a line from provided Reader respecting the provided timeout.
+func readLineWithTimeout(reader LineReader, timeout time.Duration) ([]byte, error) {
+	type readerMessage struct {
+		line []byte
+		err  error
+	}
+
+	messages := make(chan readerMessage, 1)
+	go func() {
+		line, _, err := reader.ReadLine()
+		messages <- readerMessage{line, err}
+		close(messages)
+	}()
+
+	select {
+	case <-time.NewTimer(timeout).C:
+		return nil, fmt.Errorf("timeout reading output")
+	case message := <-messages:
+		return message.line, message.err
+	}
 }

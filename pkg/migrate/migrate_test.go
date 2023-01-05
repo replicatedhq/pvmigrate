@@ -3065,3 +3065,68 @@ func Test_copyAllPVCs(t *testing.T) {
 		})
 	}
 }
+
+type mockReader struct {
+	fn func() ([]byte, bool, error)
+}
+
+func (m mockReader) ReadLine() ([]byte, bool, error) {
+	return m.fn()
+}
+
+func Test_readLineWithTimeout(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration
+		err     string
+		output  []byte
+		fn      func() ([]byte, bool, error)
+	}{
+		{
+			name:    "immediatly return should work",
+			timeout: time.Second,
+			output:  []byte(`testing`),
+			fn: func() ([]byte, bool, error) {
+				return []byte(`testing`), false, nil
+			},
+		},
+		{
+			name:    "taking to long to read should fail with timeout",
+			timeout: 500 * time.Millisecond,
+			err:     "timeout reading output",
+			fn: func() ([]byte, bool, error) {
+				time.Sleep(time.Second)
+				return []byte(`testing`), false, nil
+			},
+		},
+		{
+			name:    "returned error from the reader should bubble up to the caller",
+			timeout: time.Second,
+			err:     "this is a custom error",
+			fn: func() ([]byte, bool, error) {
+				return nil, false, fmt.Errorf("this is a custom error")
+			},
+		},
+		{
+			name:    "slow read but with a bigger timeout should work",
+			timeout: 3 * time.Second,
+			output:  []byte(`this is the returned message`),
+			fn: func() ([]byte, bool, error) {
+				time.Sleep(2 * time.Second)
+				return []byte(`this is the returned message`), false, nil
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			var reader = &mockReader{fn: tt.fn}
+			line, err := readLineWithTimeout(reader, tt.timeout)
+			if len(tt.err) == 0 {
+				req.NoError(err, "unexpected error %v", err)
+			} else {
+				req.ErrorContains(err, tt.err)
+			}
+			req.Equal(line, tt.output, "expected %q, received %q", string(tt.output), string(line))
+		})
+	}
+}

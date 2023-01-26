@@ -30,6 +30,7 @@ func main() {
 	var preflightValidationOnly bool
 	var podReadyTimeout int
 	var deletePVTimeout int
+	var scaleDownTimeout int
 	flag.StringVar(&options.SourceSCName, "source-sc", "", "storage provider name to migrate from")
 	flag.StringVar(&options.DestSCName, "dest-sc", "", "storage provider name to migrate to")
 	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
@@ -39,6 +40,7 @@ func main() {
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
 	flag.IntVar(&podReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for validation pod(s) to go into Ready phase")
 	flag.IntVar(&deletePVTimeout, "delete-pv-timeout", 300, "length of time to wait (in seconds) for backing PV to be removed when temporary PVC is deleted")
+	flag.IntVar(&scaleDownTimeout, "scale-down-timeout", 0, "length of time to wait (in seconds) for deployments, statefulsets, and replicasets to scale down, if not defined awaits indefinitely")
 	flag.BoolVar(&skipPreflightValidation, "skip-preflight-validation", false, "skip preflight migration validation on the destination storage provider")
 	flag.BoolVar(&preflightValidationOnly, "preflight-validation-only", false, "skip the migration and run preflight validation only")
 
@@ -47,6 +49,7 @@ func main() {
 	// update options with flag values
 	options.PodReadyTimeout = time.Duration(podReadyTimeout) * time.Second
 	options.DeletePVTimeout = time.Duration(deletePVTimeout) * time.Second
+	options.ScaleDownTimeout = time.Duration(scaleDownTimeout) * time.Second
 
 	// setup logger
 	logger := log.New(os.Stderr, "", 0) // this has no time prefix etc

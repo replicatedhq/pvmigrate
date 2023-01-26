@@ -2359,7 +2359,7 @@ func Test_scaleDownPods(t *testing.T) {
 			if tt.backgroundFunc != nil {
 				go tt.backgroundFunc(testCtx, testlog, clientset)
 			}
-			actualMatchingPVCs, err := scaleDownPods(testCtx, testlog, clientset, tt.matchingPVCs, time.Second/20)
+			actualMatchingPVCs, err := scaleDownPods(testCtx, testlog, clientset, tt.matchingPVCs, time.Second/20, 0)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("got expected error %q", err.Error())

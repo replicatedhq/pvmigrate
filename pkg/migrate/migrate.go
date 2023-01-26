@@ -49,6 +49,7 @@ type Options struct {
 	SkipSourceValidation bool
 	PodReadyTimeout      time.Duration
 	DeletePVTimeout      time.Duration
+	ScaleDownTimeout     time.Duration
 }
 
 // Migrate moves data and PVCs from one StorageClass to another
@@ -63,7 +64,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
+	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5, options.ScaleDownTimeout)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
@@ -678,7 +679,7 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
 // It returns a map of namespace to PVCs and any errors encountered.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]pvcCtx, checkInterval time.Duration) (map[string][]pvcCtx, error) {
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]pvcCtx, checkInterval, timeout time.Duration) (map[string][]pvcCtx, error) {
 	// build new map with complete pvcCtx
 	updatedPVCs := matchingPVCs
 
@@ -835,10 +836,14 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	}
 
 	// wait for all pods to be deleted
+	stopAt := time.Now().Add(timeout)
 	w.Printf("\nWaiting for pods with mounted PVCs to be cleaned up\n")
 	time.Sleep(checkInterval / 16)
 checkPvcPodLoop:
 	for {
+		if timeout != 0 && time.Now().After(stopAt) {
+			return nil, fmt.Errorf("timeout waiting for pods to scale down")
+		}
 		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {

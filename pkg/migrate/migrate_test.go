@@ -217,7 +217,7 @@ func TestMutatePV(t *testing.T) {
 		resources []runtime.Object
 		pvname    string
 		wantErr   bool
-		ttmutator func(volume *corev1.PersistentVolume) *corev1.PersistentVolume
+		ttmutator func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error)
 		ttchecker func(volume *corev1.PersistentVolume) bool
 		validate  func(clientset k8sclient.Interface, t *testing.T) error
 	}{
@@ -236,9 +236,9 @@ func TestMutatePV(t *testing.T) {
 					},
 				},
 			},
-			ttmutator: func(volume *corev1.PersistentVolume) *corev1.PersistentVolume {
+			ttmutator: func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
 				volume.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-				return volume
+				return volume, nil
 			},
 			ttchecker: func(volume *corev1.PersistentVolume) bool {
 				return volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain
@@ -1217,18 +1217,55 @@ func Test_swapPVs(t *testing.T) {
 	sourceScName := "sourceScName"
 	destScName := "destScName"
 	tests := []struct {
-		name      string
-		resources []runtime.Object
-		wantPVs   []corev1.PersistentVolume
-		wantPVCs  []corev1.PersistentVolumeClaim
-		ns        string
-		pvcName   string
-		wantErr   bool
+		name           string
+		resources      []runtime.Object
+		wantPVs        []corev1.PersistentVolume
+		wantPVCs       []corev1.PersistentVolumeClaim
+		ns             string
+		pvcName        string
+		wantErr        bool
+		backgroundFunc func(context.Context, *log.Logger, k8sclient.Interface)
 	}{
 		{
 			name:    "swap one PVC",
 			ns:      "testns",
 			pvcName: "sourcepvc",
+			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
+				// watch for the statefulset to be scaled down, and then delete the pod
+				for {
+					select {
+					case <-time.After(time.Second / 100):
+						// check statefulset, maybe delete pod
+						pvcs, err := k.CoreV1().PersistentVolumeClaims("testns").List(ctx, metav1.ListOptions{})
+						if err != nil {
+							logger.Printf("got listing PVCs: %s", err.Error())
+							continue
+						}
+
+						for _, pvc := range pvcs.Items {
+							if pvc.Spec.VolumeName != "" {
+								logger.Printf("setting pv %s claim ref to pvc %s", pvc.Spec.VolumeName, pvc.Name)
+								mutatePV(ctx, logger, k, pvc.Spec.VolumeName,
+									func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
+										volume.Spec.ClaimRef = &corev1.ObjectReference{
+											APIVersion: "v1",
+											Kind:       "PersistentVolumeClaim",
+											Namespace:  "testns",
+											Name:       pvc.Name,
+										}
+										return volume, nil
+									},
+									func(volume *corev1.PersistentVolume) bool {
+										return true
+									},
+								)
+							}
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+			},
 			resources: []runtime.Object{
 				// two PVCs
 				&corev1.PersistentVolumeClaim{
@@ -1402,6 +1439,12 @@ func Test_swapPVs(t *testing.T) {
 						},
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
 						StorageClassName:              sourceScName,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 					Status: corev1.PersistentVolumeStatus{
 						Phase: corev1.VolumeBound,
@@ -1442,6 +1485,11 @@ func Test_swapPVs(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
+
+			if tt.backgroundFunc != nil {
+				go tt.backgroundFunc(context.Background(), testlog, clientset)
+			}
+
 			err := swapPVs(context.Background(), testlog, clientset, tt.ns, tt.pvcName)
 			if tt.wantErr {
 				req.Error(err)
@@ -1489,6 +1537,12 @@ func Test_resetReclaimPolicy(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 				},
 			},
@@ -1507,6 +1561,12 @@ func Test_resetReclaimPolicy(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 				},
 			},
@@ -1530,6 +1590,12 @@ func Test_resetReclaimPolicy(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 				},
 			},
@@ -1548,6 +1614,12 @@ func Test_resetReclaimPolicy(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 				},
 			},
@@ -1569,6 +1641,12 @@ func Test_resetReclaimPolicy(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 				},
 			},
@@ -1586,6 +1664,12 @@ func Test_resetReclaimPolicy(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeSpec{
 						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRecycle,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
 					},
 				},
 			},

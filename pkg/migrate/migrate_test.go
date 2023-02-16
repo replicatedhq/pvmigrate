@@ -1245,7 +1245,7 @@ func Test_swapPVs(t *testing.T) {
 						for _, pvc := range pvcs.Items {
 							if pvc.Spec.VolumeName != "" {
 								logger.Printf("setting pv %s claim ref to pvc %s", pvc.Spec.VolumeName, pvc.Name)
-								mutatePV(ctx, logger, k, pvc.Spec.VolumeName,
+								err := mutatePV(ctx, logger, k, pvc.Spec.VolumeName,
 									func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
 										volume.Spec.ClaimRef = &corev1.ObjectReference{
 											APIVersion: "v1",
@@ -1259,6 +1259,9 @@ func Test_swapPVs(t *testing.T) {
 										return true
 									},
 								)
+								if err != nil {
+									logger.Printf("error mutating PV: %s", err)
+								}
 							}
 						}
 					case <-ctx.Done():

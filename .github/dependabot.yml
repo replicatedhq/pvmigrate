@@ -5,7 +5,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    labels:
+      - "go"
+      - "dependencies"
+      - "type::chore"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    labels:
+      - "github_actions"
+      - "dependencies"
+      - "type::chore"

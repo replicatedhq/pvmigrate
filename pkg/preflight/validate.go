@@ -16,8 +16,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
-	k8spodutils "k8s.io/kubernetes/pkg/api/v1/pod"
-
 	"k8s.io/utils/pointer"
 )
 
@@ -251,7 +249,7 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 		}
 
 		switch {
-		case k8spodutils.IsPodReady(gotPod):
+		case k8sutil.IsPodReady(gotPod):
 			return nil, nil
 		default:
 			time.Sleep(time.Second)

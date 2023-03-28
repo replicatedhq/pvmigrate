@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/replicatedhq/pvmigrate/pkg/migrate"
@@ -30,9 +31,11 @@ func main() {
 	var preflightValidationOnly bool
 	var podReadyTimeout int
 	var deletePVTimeout int
+	var rsyncFlags string
 	flag.StringVar(&options.SourceSCName, "source-sc", "", "storage provider name to migrate from")
 	flag.StringVar(&options.DestSCName, "dest-sc", "", "storage provider name to migrate to")
 	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
+	flag.StringVar(&rsyncFlags, "rsync-flags", "", "additional flags to pass to rsync command")
 	flag.StringVar(&options.Namespace, "namespace", "", "only migrate PVCs within this namespace")
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
@@ -47,6 +50,11 @@ func main() {
 	// update options with flag values
 	options.PodReadyTimeout = time.Duration(podReadyTimeout) * time.Second
 	options.DeletePVTimeout = time.Duration(deletePVTimeout) * time.Second
+
+	if rsyncFlags != "" {
+		rsyncFlagsSlice := strings.Split(rsyncFlags, ",")
+		options.RsyncFlags = rsyncFlagsSlice
+	}
 
 	// setup logger
 	logger := log.New(os.Stderr, "", 0) // this has no time prefix etc

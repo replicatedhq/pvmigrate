@@ -5,9 +5,10 @@ PVCs to refer to the new PVs.
 
 ## Preflight Validation
 
-`pvmigrate` will run preflight migration validation to catch any potential failures prior to the migration. 
+`pvmigrate` will run preflight migration validation to catch any potential failures prior to the migration.
 
-Currently supported validations are: 
+Currently supported validations are:
+
 - Checking for existence of storage classes
 - Checking existing PVC access modes are supported on the destination storage provider
 
@@ -27,19 +28,20 @@ pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-on
 
 ## Flags
 
-| Flag                     | Type   | Required | Default          | Description                                                                                      |
-|--------------------------|--------|----------|------------------|--------------------------------------------------------------------------------------------------|
-| --source-sc              | String | ✓        |                  | storage provider name to migrate from                                                            |
-| --dest-sc                | String | ✓        |                  | storage provider name to migrate to                                                              |
-| --namespace              | String |          |                  | only migrate PVCs within this namespace                                                       |
-| --rsync-image            | String |          | eeacms/rsync:2.3 | the image to use to copy PVCs - must have 'rsync' on the path                                    |
-| --set-defaults           | Bool   |          | false            | change default storage class from source to dest                                                 |
-| --verbose-copy           | Bool   |          | false            | show output from the rsync command used to copy data between PVCs                                |
-| --skip-source-validation | Bool   |          | false            | migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist |
-| --preflight-validation-only | Bool | | false | skip the migration and run preflight validation only |
-| --skip-preflight-validation | Bool | | false | skip preflight migration validation on the destination storage provider |
-| --pod-ready-timeout | time.Duration | | 60 seconds | length of time to wait (in seconds) for validation pod(s) to go into Ready phase |
-| --delete-pv-timeout | time.Duration | | 5 minutes | length of time to wait (in seconds) for backing PV to be removed when the temporary PVC is deleted |
+| Flag                        | Type    | Required | Default          | Description                                                                                        |
+|-----------------------------|---------|----------|------------------|----------------------------------------------------------------------------------------------------|
+| --source-sc                 | String  | ✓        |                  | storage provider name to migrate from                                                              |
+| --dest-sc                   | String  | ✓        |                  | storage provider name to migrate to                                                                |
+| --namespace                 | String  |          |                  | only migrate PVCs within this namespace                                                            |
+| --rsync-image               | String  |          | eeacms/rsync:2.3 | the image to use to copy PVCs - must have 'rsync' on the path                                      |
+| --rsync-flags               | String  |          |                  | A comma-separated list of additional flags to pass to rsync when copying PVCs                      |
+| --set-defaults              | Bool    |          | false            | change default storage class from source to dest                                                   |
+| --verbose-copy              | Bool    |          | false            | show output from the rsync command used to copy data between PVCs                                  |
+| --skip-source-validation    | Bool    |          | false            | migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist   |
+| --preflight-validation-only | Bool    |          | false            | skip the migration and run preflight validation only                                               |
+| --skip-preflight-validation | Bool    |          | false            | skip preflight migration validation on the destination storage provider                            |
+| --pod-ready-timeout         | Integer |          | 60               | length of time to wait (in seconds) for validation pod(s) to go into Ready phase                   |
+| --delete-pv-timeout         | Integer |          | 300              | length of time to wait (in seconds) for backing PV to be removed when the temporary PVC is deleted |
 
 ## Process
 

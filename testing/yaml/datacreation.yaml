@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: createfile
+data:
+  create.sh: |
+    echo 'pvmigrate test string' > /pvmigrate/test
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: www-web-0
+spec:
+  template:
+    spec:
+      containers:
+        - name: training-container
+          image: registry.k8s.io/nginx-slim:0.8
+          command:
+            - bash
+            - /app/create.sh
+          volumeMounts:
+            - mountPath: /pvmigrate/
+              name: data-volume
+            - name: config-volume
+              mountPath: /app/create.sh
+              subPath: create.sh
+      restartPolicy: Never
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: www-web-0
+        - name: config-volume
+          configMap:
+            name: createfile
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: www-web-1
+spec:
+  template:
+    spec:
+      containers:
+        - name: training-container
+          image: registry.k8s.io/nginx-slim:0.8
+          command:
+            - bash
+            - /app/create.sh
+          volumeMounts:
+            - mountPath: /pvmigrate/
+              name: data-volume
+            - name: config-volume
+              mountPath: /app/create.sh
+              subPath: create.sh
+      restartPolicy: Never
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: www-web-1
+        - name: config-volume
+          configMap:
+            name: createfile
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deployment-pvc
+spec:
+  template:
+    spec:
+      containers:
+        - name: training-container
+          image: registry.k8s.io/nginx-slim:0.8
+          command:
+            - bash
+            - /app/create.sh
+          volumeMounts:
+            - mountPath: /pvmigrate/
+              name: data-volume
+            - name: config-volume
+              mountPath: /app/create.sh
+              subPath: create.sh
+      restartPolicy: Never
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: deployment-pvc
+        - name: config-volume
+          configMap:
+            name: createfile
+---

@@ -115,6 +115,8 @@ curl https://krew.sh/view-serviceaccount-kubeconfig | bash
 export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
 
 mv ~/.kube/config ~/.kube/config.bak
+
+kubectl create token --help
 kubectl create token pvmigrate | kubectl view_serviceaccount_kubeconfig > ~/.kube/config
 echo ""
 echo "test permissions:"

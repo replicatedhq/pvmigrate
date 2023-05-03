@@ -103,3 +103,20 @@ spinner_until 120 deployment_fully_updated default short-pvc-name
 echo ""
 echo "'short-pvc-name' deployment healthy"
 
+echo ""
+echo "setting up rbac for the testing service account"
+echo ""
+kubectl apply -f ./rbac.yaml # the ClusterRole
+kubectl apply -f ./testing/yaml/rbac.yaml # the ClusterRoleBinding and ServiceAccount
+
+curl -O kubectl-view_serviceaccount_kubeconfig.zip https://github.com/superbrothers/kubectl-view-serviceaccount-kubeconfig-plugin/releases/download/v2.3.0/kubectl-view_serviceaccount_kubeconfig-linux-amd64.zip
+tar -xvf kubectl-view_serviceaccount_kubeconfig.zip
+chmod +x kubectl-view_serviceaccount_kubeconfig
+mv kubectl-view_serviceaccount_kubeconfig /usr/local/bin/kubectl-view_serviceaccount_kubeconfig
+
+mv ~/.kube/config ~/.kube/config.bak
+kubectl create token pvmigrate | kubectl view_serviceaccount_kubeconfig > ~/.kube/config
+echo ""
+echo "test permissions:"
+echo ""
+kubectl auth can-i --list

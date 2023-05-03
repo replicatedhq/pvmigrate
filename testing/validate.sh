@@ -70,6 +70,9 @@ function spinner_until() {
     done
 }
 
+rm ~/.kube/config
+mv ~/.kube/config.bak ~/.kube/config # use the root ServiceAccount for validation
+
 kubectl get statefulsets
 kubectl get deployments
 

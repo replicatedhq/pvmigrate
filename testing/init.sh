@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set +e
+
 # this waits for a deployment to have all replicas up-to-date and available
 function deployment_fully_updated() {
     x_fully_updated "$1" deployment "$2"
@@ -109,7 +111,7 @@ echo ""
 kubectl apply -f ./rbac.yaml # the ClusterRole
 kubectl apply -f ./testing/yaml/rbac.yaml # the ClusterRoleBinding and ServiceAccount
 
-curl -O kubectl-view_serviceaccount_kubeconfig.zip https://github.com/superbrothers/kubectl-view-serviceaccount-kubeconfig-plugin/releases/download/v2.3.0/kubectl-view_serviceaccount_kubeconfig-linux-amd64.zip
+wget https://github.com/superbrothers/kubectl-view-serviceaccount-kubeconfig-plugin/releases/download/v2.3.0/kubectl-view_serviceaccount_kubeconfig-linux-amd64.zip
 tar -xvf kubectl-view_serviceaccount_kubeconfig.zip
 chmod +x kubectl-view_serviceaccount_kubeconfig
 mv kubectl-view_serviceaccount_kubeconfig /usr/local/bin/kubectl-view_serviceaccount_kubeconfig

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set +e
+
 # this waits for a deployment to have all replicas up-to-date and available
 function deployment_fully_updated() {
     x_fully_updated "$1" deployment "$2"

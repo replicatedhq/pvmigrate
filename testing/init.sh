@@ -112,7 +112,7 @@ kubectl apply -f ./rbac.yaml # the ClusterRole
 kubectl apply -f ./testing/yaml/rbac.yaml # the ClusterRoleBinding and ServiceAccount
 
 wget https://github.com/superbrothers/kubectl-view-serviceaccount-kubeconfig-plugin/releases/download/v2.3.0/kubectl-view_serviceaccount_kubeconfig-linux-amd64.zip
-tar -xvf kubectl-view_serviceaccount_kubeconfig.zip
+tar -xvf kubectl-view_serviceaccount_kubeconfig-linux-amd64.zip
 chmod +x kubectl-view_serviceaccount_kubeconfig
 mv kubectl-view_serviceaccount_kubeconfig /usr/local/bin/kubectl-view_serviceaccount_kubeconfig
 

@@ -16,3 +16,12 @@ subjects:
   - kind: ServiceAccount
     name: pvmigrate
     namespace: default
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pvmigrate-secret
+  annotations:
+    kubernetes.io/service-account.name: pvmigrate
+type: kubernetes.io/service-account-token
+---

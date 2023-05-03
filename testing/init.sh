@@ -116,8 +116,7 @@ export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
 
 mv ~/.kube/config ~/.kube/config.bak
 
-kubectl create token --help
-kubectl create token pvmigrate | kubectl view_serviceaccount_kubeconfig > ~/.kube/config
+kubectl view_serviceaccount_kubeconfig pvmigrate > ~/.kube/config
 echo ""
 echo "test permissions:"
 echo ""

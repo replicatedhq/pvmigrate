@@ -361,6 +361,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 			Namespace: ns,
 			Labels: map[string]string{
 				baseAnnotation: sourcePvcName,
+				kindAnnotation: "migrate",
 			},
 		},
 		Spec: corev1.PodSpec{

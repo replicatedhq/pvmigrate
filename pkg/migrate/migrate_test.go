@@ -959,6 +959,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1032,6 +1033,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1127,6 +1129,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1207,6 +1210,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{

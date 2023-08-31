@@ -183,7 +183,12 @@ func buildTmpPVCConsumerPod(pvcName, namespace, image string) *corev1.Pod {
 }
 
 // buildTmpPVC creates a temporary PVC requesting for 1Mi of storage for a provided storage class name.
-func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.PersistentVolumeClaim {
+func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) (*corev1.PersistentVolumeClaim, error) {
+	destAccessModes, err := migrate.GetDestAccessModes(pvc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get destination access mode for PVC %s in %s: %w", pvc.Name, pvc.Namespace, err)
+	}
+
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      k8sutil.NewPrefixedName(pvcNamePrefix, pvc.Name),
@@ -191,14 +196,14 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) *corev1.Persistent
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
-			AccessModes:      pvc.Spec.AccessModes,
+			AccessModes:      destAccessModes,
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: resource.MustParse("1Mi"),
 				},
 			},
 		},
-	}
+	}, nil
 }
 
 // checkVolumeAccessModes checks if the access modes of a pv are supported by the
@@ -207,7 +212,10 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 	var err error
 
 	// create temp pvc for storage class
-	tmpPVCSpec := buildTmpPVC(pvc, dstSC)
+	tmpPVCSpec, err := buildTmpPVC(pvc, dstSC)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary pvc spec for %s: %w", pvc.Name, err)
+	}
 	tmpPVC, err := client.CoreV1().PersistentVolumeClaims(tmpPVCSpec.Namespace).Create(
 		ctx, tmpPVCSpec, metav1.CreateOptions{})
 	if err != nil {

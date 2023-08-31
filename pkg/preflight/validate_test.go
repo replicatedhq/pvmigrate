@@ -488,7 +488,10 @@ func Test_buildTmpPVC(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			pvc := buildTmpPVC(*tt.input, tt.dstStorageClass)
+			pvc, err := buildTmpPVC(*tt.input, tt.dstStorageClass)
+			if err != nil {
+				req.NoError(err)
+			}
 			req.Equal(tt.expectedPVC, pvc)
 		})
 	}

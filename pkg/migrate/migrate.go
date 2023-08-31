@@ -20,12 +20,13 @@ import (
 )
 
 const (
-	baseAnnotation           = "kurl.sh/pvcmigrate"
-	scaleAnnotation          = baseAnnotation + "-scale"
-	kindAnnotation           = baseAnnotation + "-kind"
-	sourceNsAnnotation       = baseAnnotation + "-sourcens"
-	sourcePVCAnnotation      = baseAnnotation + "-sourcepvc"
-	desiredReclaimAnnotation = baseAnnotation + "-reclaim"
+	baseAnnotation              = "kurl.sh/pvcmigrate"
+	scaleAnnotation             = baseAnnotation + "-scale"
+	kindAnnotation              = baseAnnotation + "-kind"
+	sourceNsAnnotation          = baseAnnotation + "-sourcens"
+	sourcePVCAnnotation         = baseAnnotation + "-sourcepvc"
+	desiredReclaimAnnotation    = baseAnnotation + "-reclaim"
+	DesiredAccessModeAnnotation = baseAnnotation + "-desiredaccessmode"
 )
 
 // IsDefaultStorageClassAnnotation - this is also exported by https://github.com/kubernetes/kubernetes/blob/v1.21.3/pkg/apis/storage/v1/util/helpers.go#L25
@@ -511,6 +512,12 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				}
 			}
 
+			// Set destination access mode based on annotations
+			destAccessModes, err := GetDestAccessModes(*nsPvc.claim)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to get destination access mode for PVC %s in %s: %w", nsPvc.claim.Name, ns, err)
+			}
+
 			// if it doesn't already exist, create it
 			newPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &corev1.PersistentVolumeClaim{
 				TypeMeta: nsPvc.claim.TypeMeta,
@@ -529,7 +536,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 							corev1.ResourceStorage: desiredPvStorage,
 						},
 					},
-					AccessModes: nsPvc.claim.Spec.AccessModes,
+					AccessModes: destAccessModes,
 				},
 			}, metav1.CreateOptions{})
 			if err != nil {
@@ -1031,6 +1038,12 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to remove claimrefs from PV %s: %w", migratedPVC.Spec.VolumeName, err)
 	}
 
+	// Set destination access mode based on annotations
+	destAccessModes, err := GetDestAccessModes(*originalPVC)
+	if err != nil {
+		return fmt.Errorf("failed to get destination access mode for PVC %s in %s: %w", originalPVC.Name, ns, err)
+	}
+
 	// create new PVC with the old name/annotations/settings, and the new PV
 	w.Printf("Creating new PVC %s with migrated-to PV %s\n", originalPVC.Name, migratedPVC.Spec.VolumeName)
 	newPVC := corev1.PersistentVolumeClaim{
@@ -1044,7 +1057,7 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 			Labels:    originalPVC.Labels, // copy labels, don't copy annotations
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: originalPVC.Spec.AccessModes,
+			AccessModes: destAccessModes,
 			Resources:   originalPVC.Spec.Resources,
 			VolumeMode:  originalPVC.Spec.VolumeMode,
 
@@ -1159,4 +1172,22 @@ func readLineWithTimeout(reader LineReader, timeout time.Duration) ([]byte, erro
 	case message := <-messages:
 		return message.line, message.err
 	}
+}
+
+func GetDestAccessModes(srcPVC corev1.PersistentVolumeClaim) ([]corev1.PersistentVolumeAccessMode, error) {
+	// default to the source PVCs access mode if DesiredAccessModeAnnotation is not set
+	destAccessMode := srcPVC.Spec.AccessModes
+	if accessMode := srcPVC.Annotations[DesiredAccessModeAnnotation]; accessMode != "" {
+		switch accessMode {
+		case "ReadWriteOnce":
+			destAccessMode = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		case "ReadOnlyMany":
+			destAccessMode = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
+		case "ReadWriteMany":
+			destAccessMode = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+		default:
+			return nil, fmt.Errorf("invalid access mode '%s' used in annotation '%s' for PVC '%s' in namespace '%s'", accessMode, DesiredAccessModeAnnotation, srcPVC.Name, srcPVC.Namespace)
+		}
+	}
+	return destAccessMode, nil
 }

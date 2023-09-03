@@ -43,6 +43,10 @@ pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-on
 | --pod-ready-timeout         | Integer |          | 60               | length of time to wait (in seconds) for validation pod(s) to go into Ready phase                   |
 | --delete-pv-timeout         | Integer |          | 300              | length of time to wait (in seconds) for backing PV to be removed when the temporary PVC is deleted |
 
+## Annotations
+
+`kurl.sh/pvcmigrate-destinationaccessmode` - Modifies the access mode of the PVC during migration. Valid options are - `[ReadWriteOnce, ReadWriteMany, ReadOnlyMany]`
+
 ## Process
 
 In order, it:
@@ -50,7 +54,9 @@ In order, it:
 1. Validates that both the `source` and `dest` StorageClasses exist
 2. Finds PVs using the `source` StorageClass
 3. Finds PVCs corresponding to the above PVs
-4. Creates new PVCs for each existing PVC, but using the `dest` StorageClass
+4. Creates new PVCs for each existing PVC
+    * Uses the `dest` StorageClass for the new PVCs
+    * Uses the access mode set in the annotation: `kurl.sh/pvcmigrate-destinationaccessmode` if specified on a source PVC
 5. For each PVC:
     * Finds all pods mounting the existing PVC
     * Finds all StatefulSets and Deployments controlling those pods and adds an annotation with the original scale

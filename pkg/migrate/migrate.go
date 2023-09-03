@@ -26,7 +26,7 @@ const (
 	sourceNsAnnotation          = baseAnnotation + "-sourcens"
 	sourcePVCAnnotation         = baseAnnotation + "-sourcepvc"
 	desiredReclaimAnnotation    = baseAnnotation + "-reclaim"
-	DesiredAccessModeAnnotation = baseAnnotation + "-desiredaccessmode"
+	DesiredAccessModeAnnotation = baseAnnotation + "-destinationaccessmode"
 )
 
 // IsDefaultStorageClassAnnotation - this is also exported by https://github.com/kubernetes/kubernetes/blob/v1.21.3/pkg/apis/storage/v1/util/helpers.go#L25

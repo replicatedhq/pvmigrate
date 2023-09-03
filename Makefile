@@ -28,6 +28,8 @@ define LDFLAGS
 "
 endef
 
+BUILDPATHS = ./... ./cmd/...
+
 .PHONY: clean
 clean:
 	rm -rf ./bin

@@ -485,10 +485,45 @@ func Test_buildTmpPVC(t *testing.T) {
 			},
 			dstStorageClass: "dstSc",
 		},
+		{
+			name: "change access mode of tmp PVC if destinationaccessmode annotation is set",
+			input: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-name",
+					Namespace: "default",
+					Annotations: map[string]string{
+						"kurl.sh/pvcmigrate-destinationaccessmode": "ReadWriteMany",
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+				},
+			},
+			expectedPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pf-pvc-pvc-name",
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					StorageClassName: pointer.String("dstSc"),
+					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Mi"),
+						},
+					},
+				},
+			},
+			dstStorageClass: "dstSc",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			pvc := buildTmpPVC(*tt.input, tt.dstStorageClass)
+			pvc, err := buildTmpPVC(*tt.input, tt.dstStorageClass)
+			if err != nil {
+				req.NoError(err)
+			}
 			req.Equal(tt.expectedPVC, pvc)
 		})
 	}

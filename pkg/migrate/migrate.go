@@ -725,6 +725,8 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 							// when migrating the pvc data we'll use the nodeName to create the volume
 							// on the node where the pod was originally scheduled on
 
+							w.Printf("Found pod %s on %s in %s using PVC %s\n", nsPod.Name, nsPod.Spec.NodeName, ns, nsPvClaim.Name)
+
 							// TODO this is the only place in this function that we mutate the existing cluster, is there a better way?
 							err = mutatePV(ctx, w, clientset, nsPvClaim.Spec.VolumeName, func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
 								// add annotations describing what node this data came from to help migrate

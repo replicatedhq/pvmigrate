@@ -41,15 +41,18 @@ jobs:
         run: ./testing/init.sh
 
       - name: Run PVMigrate
-        run: ./bin/pvmigrate --source-sc int-source --dest-sc int-dest | tee /tmp/pvmigrate.log
+        run: ./bin/pvmigrate --source-sc int-source --dest-sc int-dest | tee ./pvmigrate.log
+
+      - name: cat logs
+        run: cat ./pvmigrate.log
 
       - name: Ensure Pods migrated on defined Nodes
         run: |
-          grep "Creating pvc migrator pod on node chart-testing-control-plane" /tmp/pvmigrate.log
+          grep "Creating pvc migrator pod on node chart-testing-control-plane" ./pvmigrate.log
 
       - name: test that nonmatching greps fail
         run: |
-          grep "this string does not exist" /tmp/pvmigrate.log
+          grep "this string does not exist" ./pvmigrate.log
 
       - name: Validate Cluster End State
         run: ./testing/validate.sh

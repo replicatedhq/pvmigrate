@@ -2353,7 +2353,7 @@ func Test_scaleDownPods(t *testing.T) {
 			},
 		},
 		{
-			name: "existing statefulset pod",
+			name: "existing multi-volume statefulset pod",
 			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
 					&corev1.PersistentVolumeClaim{
@@ -2367,6 +2367,19 @@ func Test_scaleDownPods(t *testing.T) {
 						},
 						Spec: corev1.PersistentVolumeClaimSpec{
 							VolumeName: "sourcepv",
+						},
+					},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "secondpvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "secondpv",
 						},
 					},
 				},
@@ -2413,6 +2426,15 @@ func Test_scaleDownPods(t *testing.T) {
 									},
 								},
 							},
+							{
+								Name: "secondmatchingVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "secondpvc",
+										ReadOnly:  false,
+									},
+								},
+							},
 						},
 					},
 					Status: corev1.PodStatus{},
@@ -2433,6 +2455,24 @@ func Test_scaleDownPods(t *testing.T) {
 				&corev1.PersistentVolume{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "secondpvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "secondpv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "secondpv",
 					},
 				},
 			},
@@ -2478,9 +2518,30 @@ func Test_scaleDownPods(t *testing.T) {
 							VolumeName: "sourcepv",
 						},
 					},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "secondpvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "secondpv",
+						},
+					},
 				},
 			},
 			wantPVs: []corev1.PersistentVolume{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "secondpv",
+						Annotations: map[string]string{
+							sourceNodeAnnotation: "statefulset",
+						},
+					},
+				},
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "sourcepv",

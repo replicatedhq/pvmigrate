@@ -210,6 +210,12 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	// wait for the pod to be created
 	time.Sleep(waitTime)
 	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context ended waiting for Pod %s in %s to be deleted", createdPod.Name, ns)
+		default:
+		}
+
 		gotPod, err := clientset.CoreV1().Pods(ns).Get(ctx, createdPod.Name, metav1.GetOptions{})
 		if err != nil {
 			w.Printf("failed to get newly created migration pod %s: %v\n", createdPod.Name, err)

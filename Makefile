@@ -2,6 +2,7 @@ SHELL := /bin/bash
 VERSION_PACKAGE = github.com/replicatedhq/pvmigrate/pkg/version
 VERSION ?=`git describe --tags --dirty`
 DATE=`date -u +"%Y-%m-%dT%H:%M:%SZ"`
+CURRENT_USER := $(shell id -u -n)
 
 GIT_TREE = $(shell git rev-parse --is-inside-work-tree 2>/dev/null)
 ifneq "$(GIT_TREE)" ""
@@ -56,3 +57,8 @@ build: bin/pvmigrate
 
 bin/pvmigrate: cmd/main.go pkg/migrate/migrate.go pkg/version/version.go
 	go build ${LDFLAGS} -o bin/pvmigrate cmd/main.go
+
+.PHONY: ttl-sh
+ttl-sh:
+	docker build --pull -f testing/Dockerfile -t ttl.sh/${CURRENT_USER}/pvmigrate:${VERSION} .
+	docker push ttl.sh/${CURRENT_USER}/pvmigrate:${VERSION}

@@ -30,15 +30,29 @@ function x_fully_updated() {
     local updatedReplicas
     updatedReplicas=$(kubectl get $resourcetype -n "$namespace" "$name" -o jsonpath='{.status.updatedReplicas}')
 
-    if [ "$desiredReplicas" != "$availableReplicas" ] ; then
+    if [ "$desiredReplicas" != "$availableReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$readyReplicas" ] ; then
+    if [ "$desiredReplicas" != "$readyReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$updatedReplicas" ] ; then
+    if [ "$desiredReplicas" != "$updatedReplicas" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+function job_completed() {
+    local namespace=$1
+    local name=$2
+
+    local succeeded
+    succeeded=$(kubectl get job -n "$namespace" "$name" -o jsonpath='{.status.succeeded}')
+
+    if [ "$succeeded" != "1" ]; then
         return 1
     fi
 
@@ -72,8 +86,9 @@ function spinner_until() {
     done
 }
 
-rm ~/.kube/config
-mv ~/.kube/config.bak ~/.kube/config # use the root ServiceAccount for validation
+kubectl get pods
+echo "waiting for the pvmigrate job to complete"
+spinner_until 240 job_completed default pvmigrate
 
 kubectl get statefulsets
 kubectl get deployments
@@ -94,6 +109,6 @@ kubectl get deployments
 kubectl get pvc
 
 if kubectl get pvc | grep -q int-source; then
-  echo "found PVCs in the int-source namespace"
-  exit 1
+    echo "found PVCs in the int-source namespace"
+    exit 1
 fi

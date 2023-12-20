@@ -30,15 +30,15 @@ function x_fully_updated() {
     local updatedReplicas
     updatedReplicas=$(kubectl get $resourcetype -n "$namespace" "$name" -o jsonpath='{.status.updatedReplicas}')
 
-    if [ "$desiredReplicas" != "$availableReplicas" ] ; then
+    if [ "$desiredReplicas" != "$availableReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$readyReplicas" ] ; then
+    if [ "$desiredReplicas" != "$readyReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$updatedReplicas" ] ; then
+    if [ "$desiredReplicas" != "$updatedReplicas" ]; then
         return 1
     fi
 
@@ -108,16 +108,5 @@ echo "'short-pvc-name' deployment healthy"
 echo ""
 echo "setting up rbac for the testing service account"
 echo ""
-kubectl apply -f ./rbac.yaml # the ClusterRole
+kubectl apply -f ./rbac.yaml              # the ClusterRole
 kubectl apply -f ./testing/yaml/rbac.yaml # the ClusterRoleBinding and ServiceAccount
-
-curl https://krew.sh/view-serviceaccount-kubeconfig | bash
-export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
-
-mv ~/.kube/config ~/.kube/config.bak
-
-kubectl view_serviceaccount_kubeconfig pvmigrate > ~/.kube/config
-echo ""
-echo "test permissions:"
-echo ""
-kubectl auth can-i --list

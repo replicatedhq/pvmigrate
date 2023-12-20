@@ -12,5 +12,5 @@ spec:
       containers:
         - name: pvmigrate
           image: ttl.sh/build-test/pvmigrate:latest
-          command: [ "pvmigrate" ]
+          command: [ "/pvmigrate" ]
           args: [ "--source-sc", "int-source", "--dest-sc", "int-dest" ]

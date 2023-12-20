@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 type testWriter struct {
@@ -362,7 +362,7 @@ func TestGetPVCs(t *testing.T) {
 		destScName   string
 		namespace    string
 		wantErr      bool
-		originalPVCs map[string][]pvcCtx
+		originalPVCs map[string][]*corev1.PersistentVolumeClaim
 		namespaces   []string
 		validate     func(clientset k8sclient.Interface, t *testing.T)
 	}{
@@ -423,17 +423,15 @@ func TestGetPVCs(t *testing.T) {
 				require.Equalf(t, dscString, *pvc.Spec.StorageClassName, "storage class name was %q not dsc", *pvc.Spec.StorageClassName)
 				require.Equalf(t, "1Gi", pvc.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc.Spec.Resources.Requests.Storage().String())
 			},
-			originalPVCs: map[string][]pvcCtx{
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc1",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								VolumeName: "pv1",
-							},
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
 						},
 					},
 				},
@@ -456,7 +454,7 @@ func TestGetPVCs(t *testing.T) {
 				},
 			},
 			validate:     func(clientset k8sclient.Interface, t *testing.T) {},
-			originalPVCs: map[string][]pvcCtx{},
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{},
 			namespaces:   []string{},
 		},
 
@@ -521,7 +519,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName: "pv2",
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -536,17 +534,15 @@ func TestGetPVCs(t *testing.T) {
 				require.NoError(t, err)
 				require.Equalf(t, "retained", pvc.Labels["test"], "PVC was recreated instead of retained")
 			},
-			originalPVCs: map[string][]pvcCtx{
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc1",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								VolumeName: "pv1",
-							},
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
 						},
 					},
 				},
@@ -615,7 +611,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName: "pv2",
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("2Gi"),
 							},
@@ -632,7 +628,7 @@ func TestGetPVCs(t *testing.T) {
 			resources:    []runtime.Object{},
 			sourceScName: "",
 			destScName:   "",
-			originalPVCs: map[string][]pvcCtx{},
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{},
 			namespaces:   []string{},
 			validate:     func(clientset k8sclient.Interface, t *testing.T) {},
 		},
@@ -689,20 +685,18 @@ func TestGetPVCs(t *testing.T) {
 					corev1.ReadWriteOnce,
 				}, pvc.Spec.AccessModes)
 			},
-			originalPVCs: map[string][]pvcCtx{
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc1",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								VolumeName: "pv1",
-								AccessModes: []corev1.PersistentVolumeAccessMode{
-									corev1.ReadWriteMany,
-									corev1.ReadWriteOnce,
-								},
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
+							AccessModes: []corev1.PersistentVolumeAccessMode{
+								corev1.ReadWriteMany,
+								corev1.ReadWriteOnce,
 							},
 						},
 					},
@@ -782,28 +776,24 @@ func TestGetPVCs(t *testing.T) {
 				require.Equalf(t, dscString, *pvc2.Spec.StorageClassName, "storage class name was %q not dsc", *pvc2.Spec.StorageClassName)
 				require.Equalf(t, "1Gi", pvc2.Spec.Resources.Requests.Storage().String(), "PVC size was %q not 1Gi", pvc2.Spec.Resources.Requests.Storage().String())
 			},
-			originalPVCs: map[string][]pvcCtx{
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc1",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								VolumeName: "pv1",
-							},
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
 						},
 					},
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc2",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								VolumeName: "pv2",
-							},
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc2",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv2",
 						},
 					},
 				},
@@ -869,7 +859,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName:       "pv2",
-						StorageClassName: pointer.String("sc1"),
+						StorageClassName: ptr.To("sc1"),
 					},
 				},
 			},
@@ -883,17 +873,15 @@ func TestGetPVCs(t *testing.T) {
 				require.NoError(t, err)
 				require.Equalf(t, "sc1", *pvc2.Spec.StorageClassName, "storage class name was %q not sc1", *pvc2.Spec.StorageClassName)
 			},
-			originalPVCs: map[string][]pvcCtx{
+			originalPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc1",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								VolumeName: "pv1",
-							},
+					&corev1.PersistentVolumeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc1",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "pv1",
 						},
 					},
 				},
@@ -959,6 +947,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1032,6 +1021,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1127,6 +1117,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1207,6 +1198,7 @@ func Test_createMigrationPod(t *testing.T) {
 					Namespace: "testns",
 					Labels: map[string]string{
 						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -1322,7 +1314,7 @@ func Test_swapPVs(t *testing.T) {
 
 						for _, pvc := range pvcs.Items {
 							if pvc.Spec.VolumeName != "" {
-								logger.Printf("setting pv %s claim ref to pvc %s", pvc.Spec.VolumeName, pvc.Name)
+								//logger.Printf("setting pv %s claim ref to pvc %s", pvc.Spec.VolumeName, pvc.Name)
 								err := mutatePV(ctx, logger, k, pvc.Spec.VolumeName,
 									func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
 										volume.Spec.ClaimRef = &corev1.ObjectReference{
@@ -1368,7 +1360,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteMany,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1405,7 +1397,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteOnce,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1549,7 +1541,263 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteMany,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+						StorageClassName: &destScName,
+						VolumeName:       "dest-pv",
+					},
+				},
+			},
+		},
+		{
+			name:    "swap one PVC and change destination access mode to ReadWriteOnce",
+			ns:      "testns",
+			pvcName: "sourcepvc",
+			backgroundFunc: func(ctx context.Context, logger *log.Logger, k k8sclient.Interface) {
+				// watch for the statefulset to be scaled down, and then delete the pod
+				for {
+					select {
+					case <-time.After(time.Second / 100):
+						// check statefulset, maybe delete pod
+						pvcs, err := k.CoreV1().PersistentVolumeClaims("testns").List(ctx, metav1.ListOptions{})
+						if err != nil {
+							logger.Printf("got listing PVCs: %s", err.Error())
+							continue
+						}
+
+						for _, pvc := range pvcs.Items {
+							if pvc.Spec.VolumeName != "" {
+								//logger.Printf("setting pv %s claim ref to pvc %s", pvc.Spec.VolumeName, pvc.Name)
+								err := mutatePV(ctx, logger, k, pvc.Spec.VolumeName,
+									func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
+										volume.Spec.ClaimRef = &corev1.ObjectReference{
+											APIVersion: "v1",
+											Kind:       "PersistentVolumeClaim",
+											Namespace:  "testns",
+											Name:       pvc.Name,
+										}
+										return volume, nil
+									},
+									func(volume *corev1.PersistentVolume) bool {
+										return true
+									},
+								)
+								if err != nil {
+									logger.Printf("error mutating PV: %s", err)
+								}
+							}
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+			},
+			resources: []runtime.Object{
+				// One PVC with kurl.sh/pvcmigrate-destinationaccessmode annotation set to ReadWriteMany
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "testns",
+						Annotations: map[string]string{
+							"kurl.sh/pvcmigrate-destinationaccessmode": "ReadWriteMany",
+						},
+						Labels: map[string]string{
+							"testlabel": "sourcepvc",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+						StorageClassName: &sourceScName,
+						VolumeName:       "source-pv",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						Phase: corev1.ClaimBound,
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc-pvcmigrate",
+						Namespace: "testns",
+						Annotations: map[string]string{
+							"testannotation": "sourcepvc-pvcmigrate",
+						},
+						Labels: map[string]string{
+							"testlabel": "sourcepvc-pvcmigrate",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+						StorageClassName: &destScName,
+						VolumeName:       "dest-pv",
+					},
+					Status: corev1.PersistentVolumeClaimStatus{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						Phase: corev1.ClaimBound,
+					},
+				},
+				// One PV bound by PVC with kurl.sh/pvcmigrate-destinationaccessmode annotation set
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "source-pv",
+						Labels: map[string]string{
+							"testlabel": "source-pv",
+						},
+						Annotations: map[string]string{
+							"testannotation": "source-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						StorageClassName:              sourceScName,
+					},
+					Status: corev1.PersistentVolumeStatus{
+						Phase: corev1.VolumeBound,
+					},
+				},
+				&corev1.PersistentVolume{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dest-pv",
+						Labels: map[string]string{
+							"testlabel": "dest-pv",
+						},
+						Annotations: map[string]string{
+							"testannotation": "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc-pvcmigrate",
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						StorageClassName:              sourceScName,
+					},
+					Status: corev1.PersistentVolumeStatus{
+						Phase: corev1.VolumeBound,
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "PersistentVolume",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "dest-pv",
+						Labels: map[string]string{
+							"testlabel": "dest-pv",
+						},
+						Annotations: map[string]string{
+							desiredReclaimAnnotation: "Delete",
+							sourceNsAnnotation:       "testns",
+							sourcePVCAnnotation:      "sourcepvc",
+							"testannotation":         "dest-pv",
+						},
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Capacity: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						StorageClassName:              sourceScName,
+						ClaimRef: &corev1.ObjectReference{
+							APIVersion: "v1",
+							Kind:       "PersistentVolumeClaim",
+							Namespace:  "testns",
+							Name:       "sourcepvc",
+						},
+					},
+					Status: corev1.PersistentVolumeStatus{
+						Phase: corev1.VolumeBound,
+					},
+				},
+			},
+			wantPVCs: []corev1.PersistentVolumeClaim{
+				{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "testns",
+						Labels: map[string]string{
+							"testlabel": "sourcepvc",
+						},
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteMany,
+						},
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1780,44 +2028,44 @@ func Test_scaleDownPods(t *testing.T) {
 	intVarZero := int32(0)
 	tests := []struct {
 		name             string
-		matchingPVCs     map[string][]pvcCtx
+		matchingPVCs     map[string][]*corev1.PersistentVolumeClaim
 		resources        []runtime.Object
 		wantPods         map[string][]corev1.Pod
 		wantDeployments  map[string][]appsv1.Deployment
 		wantSS           map[string][]appsv1.StatefulSet
 		wantErr          bool
-		wantMatchingPVCs map[string][]pvcCtx
+		wantMatchingPVCs map[string][]*corev1.PersistentVolumeClaim
+		wantPVs          []corev1.PersistentVolume
 		nsList           []string
 		backgroundFunc   func(context.Context, *log.Logger, k8sclient.Interface)
 	}{
 		{
 			name:             "minimal test case",
-			matchingPVCs:     map[string][]pvcCtx{},
+			matchingPVCs:     map[string][]*corev1.PersistentVolumeClaim{},
 			resources:        []runtime.Object{},
 			wantPods:         map[string][]corev1.Pod{},
 			wantDeployments:  map[string][]appsv1.Deployment{},
 			wantSS:           map[string][]appsv1.StatefulSet{},
 			wantErr:          false,
-			wantMatchingPVCs: map[string][]pvcCtx{},
+			wantMatchingPVCs: map[string][]*corev1.PersistentVolumeClaim{},
 			nsList:           []string{},
 		},
 		{
 			name: "existing migration pod",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: nil,
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "source-pv",
+						},
 					},
 				},
 			},
@@ -1846,6 +2094,7 @@ func Test_scaleDownPods(t *testing.T) {
 								},
 							},
 						},
+						NodeName: "node1",
 					},
 					Status: corev1.PodStatus{},
 				},
@@ -1858,7 +2107,14 @@ func Test_scaleDownPods(t *testing.T) {
 						Name:      "sourcepvc",
 						Namespace: "ns1",
 					},
-					Spec: corev1.PersistentVolumeClaimSpec{},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "source-pv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "source-pv",
+					},
 				},
 			},
 			wantPods: map[string][]corev1.Pod{
@@ -1871,46 +2127,29 @@ func Test_scaleDownPods(t *testing.T) {
 				"ns1": nil,
 			},
 			wantErr: false,
-			wantMatchingPVCs: map[string][]pvcCtx{
+			wantMatchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "Pod",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "migrationpod",
-								Namespace: "ns1",
-								Labels: map[string]string{
-									baseAnnotation: "test",
-								},
-							},
-							Spec: corev1.PodSpec{
-								Volumes: []corev1.Volume{
-									{
-										Name: "matchingVolume",
-										VolumeSource: corev1.VolumeSource{
-											PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-												ClaimName: "sourcepvc",
-												ReadOnly:  false,
-											},
-										},
-									},
-								},
-							},
-							Status: corev1.PodStatus{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "source-pv",
+						},
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "source-pv",
+						Annotations: map[string]string{
+							sourceNodeAnnotation: "node1",
 						},
 					},
 				},
@@ -1919,21 +2158,18 @@ func Test_scaleDownPods(t *testing.T) {
 		},
 		{
 			name: "other pvc pod",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: nil,
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
 				},
 			},
@@ -2020,21 +2256,18 @@ func Test_scaleDownPods(t *testing.T) {
 				"ns1": nil,
 			},
 			wantErr: false,
-			wantMatchingPVCs: map[string][]pvcCtx{
+			wantMatchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: nil,
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
 				},
 			},
@@ -2042,21 +2275,18 @@ func Test_scaleDownPods(t *testing.T) {
 		},
 		{
 			name: "existing unowned non-migration pod",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
 				},
 			},
@@ -2071,6 +2301,7 @@ func Test_scaleDownPods(t *testing.T) {
 						Namespace: "ns1",
 					},
 					Spec: corev1.PodSpec{
+						NodeName: "unowned",
 						Volumes: []corev1.Volume{
 							{
 								Name: "matchingVolume",
@@ -2094,69 +2325,62 @@ func Test_scaleDownPods(t *testing.T) {
 						Name:      "sourcepvc",
 						Namespace: "ns1",
 					},
-					Spec: corev1.PersistentVolumeClaimSpec{},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+					},
 				},
 			},
 			wantErr: true,
-			wantMatchingPVCs: map[string][]pvcCtx{
+			wantMatchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "Pod",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "otherpod",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PodSpec{
-								Volumes: []corev1.Volume{
-									{
-										Name: "matchingVolume",
-										VolumeSource: corev1.VolumeSource{
-											PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-												ClaimName: "sourcepvc",
-												ReadOnly:  false,
-											},
-										},
-									},
-								},
-							},
-							Status: corev1.PodStatus{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
 						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
 				},
 			},
 		},
 		{
-			name: "existing statefulset pod",
-			matchingPVCs: map[string][]pvcCtx{
+			name: "existing multi-volume statefulset pod",
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "sourcepv",
+						},
+					},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "secondpvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "secondpv",
+						},
 					},
 				},
 			},
@@ -2191,12 +2415,22 @@ func Test_scaleDownPods(t *testing.T) {
 						},
 					},
 					Spec: corev1.PodSpec{
+						NodeName: "statefulset",
 						Volumes: []corev1.Volume{
 							{
 								Name: "matchingVolume",
 								VolumeSource: corev1.VolumeSource{
 									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 										ClaimName: "sourcepvc",
+										ReadOnly:  false,
+									},
+								},
+							},
+							{
+								Name: "secondmatchingVolume",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "secondpvc",
 										ReadOnly:  false,
 									},
 								},
@@ -2214,7 +2448,32 @@ func Test_scaleDownPods(t *testing.T) {
 						Name:      "sourcepvc",
 						Namespace: "ns1",
 					},
-					Spec: corev1.PersistentVolumeClaimSpec{},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "PersistentVolumeClaim",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "secondpvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "secondpv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "secondpv",
+					},
 				},
 			},
 			wantPods: map[string][]corev1.Pod{
@@ -2244,50 +2503,50 @@ func Test_scaleDownPods(t *testing.T) {
 				},
 			},
 			wantErr: false,
-			wantMatchingPVCs: map[string][]pvcCtx{
+			wantMatchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "Pod",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sspod",
-								Namespace: "ns1",
-								OwnerReferences: []metav1.OwnerReference{
-									{
-										APIVersion: "apps/v1",
-										Kind:       "StatefulSet",
-										Name:       "app-ss",
-									},
-								},
-							},
-							Spec: corev1.PodSpec{
-								Volumes: []corev1.Volume{
-									{
-										Name: "matchingVolume",
-										VolumeSource: corev1.VolumeSource{
-											PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-												ClaimName: "sourcepvc",
-												ReadOnly:  false,
-											},
-										},
-									},
-								},
-							},
-							Status: corev1.PodStatus{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "sourcepv",
+						},
+					},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "secondpvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "secondpv",
+						},
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "secondpv",
+						Annotations: map[string]string{
+							sourceNodeAnnotation: "statefulset",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+						Annotations: map[string]string{
+							sourceNodeAnnotation: "statefulset",
 						},
 					},
 				},
@@ -2320,21 +2579,20 @@ func Test_scaleDownPods(t *testing.T) {
 		},
 		{
 			name: "existing deployment pod",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "sourcepv",
+						},
 					},
 				},
 			},
@@ -2386,6 +2644,7 @@ func Test_scaleDownPods(t *testing.T) {
 						},
 					},
 					Spec: corev1.PodSpec{
+						NodeName: "deployment",
 						Volumes: []corev1.Volume{
 							{
 								Name: "matchingVolume",
@@ -2409,7 +2668,14 @@ func Test_scaleDownPods(t *testing.T) {
 						Name:      "sourcepvc",
 						Namespace: "ns1",
 					},
-					Spec: corev1.PersistentVolumeClaimSpec{},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+					},
 				},
 			},
 			wantPods: map[string][]corev1.Pod{
@@ -2439,50 +2705,29 @@ func Test_scaleDownPods(t *testing.T) {
 				"ns1": nil,
 			},
 			wantErr: false,
-			wantMatchingPVCs: map[string][]pvcCtx{
+			wantMatchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "Pod",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "deppod",
-								Namespace: "ns1",
-								OwnerReferences: []metav1.OwnerReference{
-									{
-										APIVersion: "apps/v1",
-										Kind:       "ReplicaSet",
-										Name:       "app-rs",
-									},
-								},
-							},
-							Spec: corev1.PodSpec{
-								Volumes: []corev1.Volume{
-									{
-										Name: "matchingVolume",
-										VolumeSource: corev1.VolumeSource{
-											PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-												ClaimName: "sourcepvc",
-												ReadOnly:  false,
-											},
-										},
-									},
-								},
-							},
-							Status: corev1.PodStatus{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{
+							VolumeName: "sourcepv",
+						},
+					},
+				},
+			},
+			wantPVs: []corev1.PersistentVolume{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+						Annotations: map[string]string{
+							sourceNodeAnnotation: "deployment",
 						},
 					},
 				},
@@ -2552,6 +2797,10 @@ func Test_scaleDownPods(t *testing.T) {
 			req.Equal(tt.wantDeployments, actualDeployments)
 			req.Equal(tt.wantSS, actualSS)
 			req.Equal(tt.wantMatchingPVCs, actualMatchingPVCs)
+
+			actualPVs, err := clientset.CoreV1().PersistentVolumes().List(testCtx, metav1.ListOptions{})
+			req.NoError(err)
+			req.Equal(tt.wantPVs, actualPVs.Items)
 		})
 	}
 }
@@ -3010,32 +3259,49 @@ func Test_copyAllPVCs(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		matchingPVCs map[string][]pvcCtx
+		matchingPVCs map[string][]*corev1.PersistentVolumeClaim
+		resources    []runtime.Object
 		events       map[string]map[string][]podEvent // map of namespaces to pod names to a list of what status a pod should have and when
 		wantErr      bool
 	}{
 		{
 			name:         "minimal test case",
-			matchingPVCs: map[string][]pvcCtx{},
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{},
 			wantErr:      false,
 		},
 		{
 			name: "one PVC",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+						Annotations: map[string]string{
+							sourceNodeAnnotation: "node1",
+						},
 					},
 				},
 			},
@@ -3057,21 +3323,18 @@ func Test_copyAllPVCs(t *testing.T) {
 		},
 		{
 			name: "one PVC, failure",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
 				},
 			},
@@ -3093,51 +3356,86 @@ func Test_copyAllPVCs(t *testing.T) {
 		},
 		{
 			name: "three PVCs succeed",
-			matchingPVCs: map[string][]pvcCtx{
+			matchingPVCs: map[string][]*corev1.PersistentVolumeClaim{
 				"ns1": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "sourcepvc",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "sourcepvc",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc2",
-								Namespace: "ns1",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc2",
+							Namespace: "ns1",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
 					},
 				},
 				"ns2": {
-					{
-						claim: &corev1.PersistentVolumeClaim{
-							TypeMeta: metav1.TypeMeta{
-								Kind:       "PersistentVolumeClaim",
-								APIVersion: "v1",
-							},
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "pvc3",
-								Namespace: "ns2",
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{},
+					&corev1.PersistentVolumeClaim{
+						TypeMeta: metav1.TypeMeta{
+							Kind:       "PersistentVolumeClaim",
+							APIVersion: "v1",
 						},
-						usedByPod: &corev1.Pod{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "pvc3",
+							Namespace: "ns2",
+						},
+						Spec: corev1.PersistentVolumeClaimSpec{},
+					},
+				},
+			},
+			resources: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sourcepvc",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc2",
+						Namespace: "ns1",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv2",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv2",
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc3",
+						Namespace: "ns2",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						VolumeName: "sourcepv3",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "sourcepv3",
 					},
 				},
 			},
@@ -3177,7 +3475,7 @@ func Test_copyAllPVCs(t *testing.T) {
 			req := require.New(t)
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Second*10) // if your test takes more than 10s, there are issues
 			defer cancelfunc()
-			clientset := fake.NewSimpleClientset()
+			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 
 			// handle making the pods start/succeed/fail/etc
@@ -3292,6 +3590,146 @@ func Test_readLineWithTimeout(t *testing.T) {
 				req.ErrorContains(err, tt.err)
 			}
 			req.Equal(line, tt.output, "expected %q, received %q", string(tt.output), string(line))
+		})
+	}
+}
+
+func Test_GetDestAccessModes(t *testing.T) {
+	scName := "scName"
+	for _, tt := range []struct {
+		name            string
+		srcPVC          corev1.PersistentVolumeClaim
+		wantAccessModes []corev1.PersistentVolumeAccessMode
+		wantErr         bool
+	}{
+		{
+			name: "destination access mode is RWX",
+			srcPVC: corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-to-migrate",
+					Namespace: "ns1",
+					Annotations: map[string]string{
+						"kurl.sh/pvcmigrate-destinationaccessmode": "ReadWriteMany",
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					VolumeName: "pv2",
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+					},
+					StorageClassName: &scName,
+					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				},
+			},
+			wantAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			wantErr:         false,
+		},
+		{
+			name: "destination access mode is RWO",
+			srcPVC: corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-to-migrate",
+					Namespace: "ns1",
+					Annotations: map[string]string{
+						"kurl.sh/pvcmigrate-destinationaccessmode": "ReadWriteOnce",
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					VolumeName: "pv2",
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+					},
+					StorageClassName: &scName,
+					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+				},
+			},
+			wantAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			wantErr:         false,
+		},
+		{
+			name: "destination access mode is invalid",
+			srcPVC: corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-to-migrate",
+					Namespace: "ns1",
+					Annotations: map[string]string{
+						"kurl.sh/pvcmigrate-destinationaccessmode": "ReadWriteInifity",
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					VolumeName: "pv2",
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+					},
+					StorageClassName: &scName,
+					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+				},
+			},
+			wantAccessModes: nil,
+			wantErr:         true,
+		},
+		{
+			name: "destination access mode is empty",
+			srcPVC: corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-to-migrate",
+					Namespace: "ns1",
+					Annotations: map[string]string{
+						"kurl.sh/pvcmigrate-destinationaccessmode": "",
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					VolumeName: "pv2",
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+					},
+					StorageClassName: &scName,
+					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+				},
+			},
+			wantAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			wantErr:         false,
+		},
+		{
+			name: "destination access mode annotation isn't set",
+			srcPVC: corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-to-migrate",
+					Namespace: "ns1",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					VolumeName: "pv2",
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+					},
+					StorageClassName: &scName,
+					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+				},
+			},
+			wantAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			wantErr:         false,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+			accessModes, err := GetDestAccessModes(tt.srcPVC)
+			if tt.wantErr {
+				req.Error(err)
+				return
+			} else {
+				req.NoError(err)
+			}
+			req.Equal(tt.wantAccessModes, accessModes)
 		})
 	}
 }

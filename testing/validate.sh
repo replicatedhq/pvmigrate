@@ -52,11 +52,18 @@ function job_completed() {
     local succeeded
     succeeded=$(kubectl get job -n "$namespace" "$name" -o jsonpath='{.status.succeeded}')
 
-    if [ "$succeeded" != "1" ]; then
-        return 1
+    local failed
+    failed=$(kubectl get job -n "$namespace" "$name" -o jsonpath='{.status.failed}')
+
+    if [ "$succeeded" == "1" ]; then
+        return 0
     fi
 
-    return 0
+    if [ "$failed" == "1" ]; then
+        return 0
+    fi
+
+    return 1
 }
 
 # Run a test every second with a spinner until it succeeds
@@ -89,6 +96,7 @@ function spinner_until() {
 kubectl get pods
 echo "waiting for the pvmigrate job to complete"
 spinner_until 240 job_completed default pvmigrate
+kubectl get pods
 
 kubectl get statefulsets
 kubectl get deployments

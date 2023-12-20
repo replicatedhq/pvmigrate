@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 type testWriter struct {
@@ -859,7 +859,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName:       "pv2",
-						StorageClassName: pointer.String("sc1"),
+						StorageClassName: ptr.To("sc1"),
 					},
 				},
 			},

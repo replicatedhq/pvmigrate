@@ -38,9 +38,6 @@ jobs:
           file: testing/Dockerfile
           tags: ttl.sh/build-test/pvmigrate:latest
 
-      - name: Build
-        run: docker build --pull -f testing/Dockerfile -t  .
-
       - name: Create k8s Kind Cluster
         uses: helm/kind-action@v1.8.0
 

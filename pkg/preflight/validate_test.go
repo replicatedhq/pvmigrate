@@ -41,7 +41,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -56,7 +56,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -476,7 +476,7 @@ func Test_buildTmpPVC(t *testing.T) {
 				Spec: corev1.PersistentVolumeClaimSpec{
 					StorageClassName: pointer.String("dstSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Mi"),
 						},
@@ -508,7 +508,7 @@ func Test_buildTmpPVC(t *testing.T) {
 				Spec: corev1.PersistentVolumeClaimSpec{
 					StorageClassName: pointer.String("dstSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Mi"),
 						},
@@ -619,7 +619,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -682,7 +682,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -697,7 +697,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -712,7 +712,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("rook"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -734,7 +734,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -749,7 +749,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -795,7 +795,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -810,7 +810,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -864,7 +864,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -879,7 +879,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: pointer.String("rook"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},

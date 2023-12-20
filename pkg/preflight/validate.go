@@ -197,7 +197,7 @@ func buildTmpPVC(pvc corev1.PersistentVolumeClaim, sc string) (*corev1.Persisten
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
 			AccessModes:      destAccessModes,
-			Resources: corev1.ResourceRequirements{
+			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: resource.MustParse("1Mi"),
 				},

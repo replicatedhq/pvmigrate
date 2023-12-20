@@ -523,7 +523,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					StorageClassName: &destSCName,
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: map[corev1.ResourceName]resource.Quantity{
 							corev1.ResourceStorage: desiredPvStorage,
 						},

@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 type testWriter struct {
@@ -519,7 +519,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName: "pv2",
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -611,7 +611,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName: "pv2",
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("2Gi"),
 							},
@@ -859,7 +859,7 @@ func TestGetPVCs(t *testing.T) {
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						VolumeName:       "pv2",
-						StorageClassName: pointer.String("sc1"),
+						StorageClassName: ptr.To("sc1"),
 					},
 				},
 			},
@@ -1360,7 +1360,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteMany,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1397,7 +1397,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteOnce,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1541,7 +1541,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteMany,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1616,7 +1616,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteOnce,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1653,7 +1653,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteMany,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -1797,7 +1797,7 @@ func Test_swapPVs(t *testing.T) {
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteMany,
 						},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: map[corev1.ResourceName]resource.Quantity{
 								corev1.ResourceStorage: resource.MustParse("1Gi"),
 							},
@@ -3614,7 +3614,7 @@ func Test_GetDestAccessModes(t *testing.T) {
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					VolumeName: "pv2",
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Gi"),
 						},
@@ -3638,7 +3638,7 @@ func Test_GetDestAccessModes(t *testing.T) {
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					VolumeName: "pv2",
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Gi"),
 						},
@@ -3662,7 +3662,7 @@ func Test_GetDestAccessModes(t *testing.T) {
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					VolumeName: "pv2",
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Gi"),
 						},
@@ -3686,7 +3686,7 @@ func Test_GetDestAccessModes(t *testing.T) {
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					VolumeName: "pv2",
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Gi"),
 						},
@@ -3707,7 +3707,7 @@ func Test_GetDestAccessModes(t *testing.T) {
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					VolumeName: "pv2",
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Gi"),
 						},

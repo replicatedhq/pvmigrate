@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 func Test_validateVolumeAccessModes(t *testing.T) {
@@ -39,9 +39,9 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -54,9 +54,9 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -329,7 +329,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 					UID:       "12345",
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: pointer.String("srcSc"),
+					StorageClassName: ptr.To("srcSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
 				},
 				Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
@@ -375,7 +375,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 						UID:       "12345",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("dstSc"),
+						StorageClassName: ptr.To("dstSc"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
 					},
 					Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
@@ -464,7 +464,7 @@ func Test_buildTmpPVC(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: pointer.String("dstSc"),
+					StorageClassName: ptr.To("dstSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
 				},
 			},
@@ -474,9 +474,9 @@ func Test_buildTmpPVC(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: pointer.String("dstSc"),
+					StorageClassName: ptr.To("dstSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Mi"),
 						},
@@ -496,7 +496,7 @@ func Test_buildTmpPVC(t *testing.T) {
 					},
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: pointer.String("dstSc"),
+					StorageClassName: ptr.To("dstSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
 				},
 			},
@@ -506,9 +506,9 @@ func Test_buildTmpPVC(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: pointer.String("dstSc"),
+					StorageClassName: ptr.To("dstSc"),
 					AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-					Resources: corev1.ResourceRequirements{
+					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceStorage: resource.MustParse("1Mi"),
 						},
@@ -617,9 +617,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -680,9 +680,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -695,9 +695,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "test",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -710,9 +710,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "test",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("rook"),
+						StorageClassName: ptr.To("rook"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -732,9 +732,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -747,9 +747,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "test",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -793,9 +793,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -808,9 +808,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "test",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -862,9 +862,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("default"),
+						StorageClassName: ptr.To("default"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},
@@ -877,9 +877,9 @@ func Test_pvcsForStorageClass(t *testing.T) {
 						Namespace: "test",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						StorageClassName: pointer.String("rook"),
+						StorageClassName: ptr.To("rook"),
 						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteMany"},
-						Resources: corev1.ResourceRequirements{
+						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: resource.MustParse("1Mi"),
 							},

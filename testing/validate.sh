@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set +e
+
 # this waits for a deployment to have all replicas up-to-date and available
 function deployment_fully_updated() {
     x_fully_updated "$1" deployment "$2"
@@ -28,19 +30,40 @@ function x_fully_updated() {
     local updatedReplicas
     updatedReplicas=$(kubectl get $resourcetype -n "$namespace" "$name" -o jsonpath='{.status.updatedReplicas}')
 
-    if [ "$desiredReplicas" != "$availableReplicas" ] ; then
+    if [ "$desiredReplicas" != "$availableReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$readyReplicas" ] ; then
+    if [ "$desiredReplicas" != "$readyReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$updatedReplicas" ] ; then
+    if [ "$desiredReplicas" != "$updatedReplicas" ]; then
         return 1
     fi
 
     return 0
+}
+
+function job_completed() {
+    local namespace=$1
+    local name=$2
+
+    local succeeded
+    succeeded=$(kubectl get job -n "$namespace" "$name" -o jsonpath='{.status.succeeded}')
+
+    local failed
+    failed=$(kubectl get job -n "$namespace" "$name" -o jsonpath='{.status.failed}')
+
+    if [ "$succeeded" == "1" ]; then
+        return 0
+    fi
+
+    if [ "$failed" == "1" ]; then
+        return 0
+    fi
+
+    return 1
 }
 
 # Run a test every second with a spinner until it succeeds
@@ -70,6 +93,11 @@ function spinner_until() {
     done
 }
 
+kubectl get pods
+echo "waiting for the pvmigrate job to complete"
+spinner_until 240 job_completed default pvmigrate
+kubectl get pods
+
 kubectl get statefulsets
 kubectl get deployments
 
@@ -89,6 +117,6 @@ kubectl get deployments
 kubectl get pvc
 
 if kubectl get pvc | grep -q int-source; then
-  echo "found PVCs in the int-source namespace"
-  exit 1
+    echo "found PVCs in the int-source namespace"
+    exit 1
 fi

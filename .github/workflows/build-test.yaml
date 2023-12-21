@@ -31,8 +31,12 @@ jobs:
         with:
           go-version: 1.21
 
-      - name: Build
-        run: make build
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          file: testing/Dockerfile
+          tags: ttl.sh/build-test/pvmigrate:latest
 
       - name: Create k8s Kind Cluster
         uses: helm/kind-action@v1.8.0
@@ -41,7 +45,7 @@ jobs:
         run: ./testing/init.sh
 
       - name: Run PVMigrate
-        run: ./bin/pvmigrate --source-sc int-source --dest-sc int-dest
+        run: kubectl apply -f testing/yaml/migrate-job.yaml
 
       - name: Validate Cluster End State
         run: ./testing/validate.sh

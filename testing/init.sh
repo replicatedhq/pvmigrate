@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set +e
+
 # this waits for a deployment to have all replicas up-to-date and available
 function deployment_fully_updated() {
     x_fully_updated "$1" deployment "$2"
@@ -28,15 +30,15 @@ function x_fully_updated() {
     local updatedReplicas
     updatedReplicas=$(kubectl get $resourcetype -n "$namespace" "$name" -o jsonpath='{.status.updatedReplicas}')
 
-    if [ "$desiredReplicas" != "$availableReplicas" ] ; then
+    if [ "$desiredReplicas" != "$availableReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$readyReplicas" ] ; then
+    if [ "$desiredReplicas" != "$readyReplicas" ]; then
         return 1
     fi
 
-    if [ "$desiredReplicas" != "$updatedReplicas" ] ; then
+    if [ "$desiredReplicas" != "$updatedReplicas" ]; then
         return 1
     fi
 
@@ -103,3 +105,8 @@ spinner_until 120 deployment_fully_updated default short-pvc-name
 echo ""
 echo "'short-pvc-name' deployment healthy"
 
+echo ""
+echo "setting up rbac for the testing service account"
+echo ""
+kubectl apply -f ./rbac.yaml              # the ClusterRole
+kubectl apply -f ./testing/yaml/rbac.yaml # the ClusterRoleBinding and ServiceAccount

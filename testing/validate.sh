@@ -93,10 +93,15 @@ function spinner_until() {
     done
 }
 
-kubectl get pods
-echo "waiting for the pvmigrate job to complete"
-spinner_until 240 job_completed default pvmigrate
-kubectl get pods
+# if the pvmigrate job exists, wait for it to complete
+if kubectl get job -n default pvmigrate; then
+    kubectl get pods
+    echo "waiting for the pvmigrate job to complete"
+    spinner_until 240 job_completed default pvmigrate
+    kubectl get pods
+else
+    echo "no pvmigrate job found, assuming it was run outside of the cluster"
+fi
 
 kubectl get statefulsets
 kubectl get deployments

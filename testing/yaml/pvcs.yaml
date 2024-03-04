@@ -38,4 +38,15 @@ spec:
       storage: 1Gi
   storageClassName: int-source
 ---
-# TODO: add PVC name with >63 characters
+# this PVC name is more than 63 characters and thus will not fit in a label/annotation
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-kube-prometheus-stack-prometheus-db-prometheus-kube-prometheus-stack-prometheus-0
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: int-source

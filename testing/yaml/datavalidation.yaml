@@ -90,3 +90,42 @@ spec:
           configMap:
             name: filecontents
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-kube-prometheus-stack-prometheus-db-prometheus-kube-prometheus-stack-prometheus-0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: very-long-pvc-name
+  template:
+    metadata:
+      labels:
+        app: very-long-pvc-name
+    spec:
+      containers:
+        - name: nginx
+          image: registry.k8s.io/nginx-slim:0.8
+          ports:
+            - containerPort: 80
+              name: web
+          volumeMounts:
+            - name: data-volume
+              mountPath: /pvmigrate
+            - name: config-volume
+              mountPath: /app/contents.sh
+              subPath: contents.sh
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - /app/contents.sh
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: prometheus-kube-prometheus-stack-prometheus-db-prometheus-kube-prometheus-stack-prometheus-0
+        - name: config-volume
+          configMap:
+            name: filecontents
+---

@@ -3230,16 +3230,16 @@ func Test_newPvcName(t *testing.T) {
 			want:         "abc-pvcmigrate",
 		},
 		{
-			originalName: "very very very long name test with a suffix that might be the only unique part of it 0",
-			want:         "very very very long name test wy unique part of it 0-pvcmigrate",
+			originalName: "very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a suffix that might be the only unique part of it 0",
+			want:         "very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglongloonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a suffix that might be the only unique part of it 0-pvcmigrate",
 		},
 		{
-			originalName: "0 very very very long name test with a prefix that might be the only unique part of it",
-			want:         "0 very very very long name testnly unique part of it-pvcmigrate",
+			originalName: "0 very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a prefix that might be the only unique part of it",
+			want:         "0 very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglongglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a prefix that might be the only unique part of it-pvcmigrate",
 		},
 		{
-			originalName: "63 character (after suffix) name is untouched paddin",
-			want:         "63 character (after suffix) name is untouched paddin-pvcmigrate",
+			originalName: "253 character (after suffix)  253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name is untouched paddin",
+			want:         "253 character (after suffix)  253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name is untouched paddin-pvcmigrate",
 		},
 	}
 	for _, tt := range tests {

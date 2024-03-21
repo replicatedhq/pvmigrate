@@ -585,12 +585,12 @@ const nameSuffix = "-pvcmigrate"
 // TODO: refactor to k8sutil package
 func newPvcName(originalName string) string {
 	candidate := originalName + nameSuffix
-	if len(candidate) <= 63 {
+	if len(candidate) <= 253 {
 		return candidate
 	}
 
 	// remove characters from the middle of the string to reduce the total length to 63 characters
-	newCandidate := candidate[0:31] + candidate[len(candidate)-32:]
+	newCandidate := candidate[0:100] + candidate[len(candidate)-153:]
 	return newCandidate
 }
 

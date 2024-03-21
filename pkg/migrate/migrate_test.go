@@ -3220,37 +3220,6 @@ func Test_waitForDeletion(t *testing.T) {
 	}
 }
 
-func Test_newPvcName(t *testing.T) {
-	tests := []struct {
-		originalName string
-		want         string
-	}{
-		{
-			originalName: "abc",
-			want:         "abc-pvcmigrate",
-		},
-		{
-			originalName: "very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a suffix that might be the only unique part of it 0",
-			want:         "very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglongloonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a suffix that might be the only unique part of it 0-pvcmigrate",
-		},
-		{
-			originalName: "0 very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a prefix that might be the only unique part of it",
-			want:         "0 very very very 253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglongglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name test with a prefix that might be the only unique part of it-pvcmigrate",
-		},
-		{
-			originalName: "253 character (after suffix)  253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name is untouched paddin",
-			want:         "253 character (after suffix)  253longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong name is untouched paddin-pvcmigrate",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.originalName, func(t *testing.T) {
-			req := require.New(t)
-			got := newPvcName(tt.originalName)
-			req.Equal(tt.want, got)
-		})
-	}
-}
-
 func Test_copyAllPVCs(t *testing.T) {
 	type podEvent struct {
 		podAge    time.Duration

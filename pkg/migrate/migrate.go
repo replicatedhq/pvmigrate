@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/replicatedhq/pvmigrate/pkg/k8sutil"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -64,13 +66,16 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)
+	if options.PreSyncMode {
+		w.Println("\nRunning in pre-sync-mode, i.e., not scaling down existing pods.\nPV not supporting RWX/ReadWriteMany access mode will be skipped")
+	}
+
+	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, &options)
 	if err != nil {
 		return err
 	}
 
 	if !options.PreSyncMode {
-		w.Println("Running in pre-sync-mode. If your PVC do not support the RWX/ReadWriteMany access mode, this will fail!")
 		err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
 		if err != nil {
 			return fmt.Errorf("failed to scale down pods: %w", err)
@@ -423,7 +428,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to arrays of original PVCs
 // an array of namespaces that the PVCs were found within
 // an error, if one was encountered
-func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]*corev1.PersistentVolumeClaim, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, opts *Options) (map[string][]*corev1.PersistentVolumeClaim, []string, error) {
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -432,11 +437,11 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	matchingPVs := []corev1.PersistentVolume{}
 	pvsByName := map[string]corev1.PersistentVolume{}
 	for _, pv := range pvs.Items {
-		if pv.Spec.StorageClassName == sourceSCName {
+		if pv.Spec.StorageClassName == opts.SourceSCName {
 			matchingPVs = append(matchingPVs, pv)
 			pvsByName[pv.Name] = pv
 		} else {
-			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, sourceSCName)
+			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, opts.SourceSCName)
 		}
 	}
 
@@ -445,9 +450,15 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	matchingPVCs := map[string][]*corev1.PersistentVolumeClaim{}
 	for _, pv := range matchingPVs {
 		if pv.Spec.ClaimRef != nil {
-			if len(Namespace) > 0 && pv.Spec.ClaimRef.Namespace != Namespace {
+			if len(opts.Namespace) > 0 && pv.Spec.ClaimRef.Namespace != opts.Namespace {
 				continue // early continue, to prevent logging info regarding PV/PVCs in other namespaces
 			}
+
+			if opts.PreSyncMode && !slices.Contains(pv.Spec.AccessModes, v1.ReadWriteMany) {
+				w.Printf("PV %s for PVC %s does not support RWX access mode, skipping it.", pv.Name, pv.Spec.ClaimRef.Name)
+				continue
+			}
+
 			if strings.HasSuffix(pv.Spec.ClaimRef.Name, k8sutil.PVCNameSuffix) {
 				w.Printf("Skipping PV %s as the claiming PVC has the %s suffix", pv.Name, k8sutil.PVCNameSuffix)
 				continue
@@ -486,7 +497,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	}
 
 	// create new PVCs for each matching PVC
-	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
+	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", opts.DestSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
 			newName := k8sutil.NewPvcName(nsPvc.Name)
@@ -508,7 +519,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 					return nil, nil, fmt.Errorf("failed to find existing PVC: %w", err)
 				}
 			} else if existingPVC != nil {
-				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == destSCName {
+				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == opts.DestSCName {
 					existingSize := existingPVC.Spec.Resources.Requests.Storage().String()
 
 					if existingSize == desiredPvStorage.String() {
@@ -540,7 +551,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 					},
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: &destSCName,
+					StorageClassName: &opts.DestSCName,
 					Resources: corev1.VolumeResourceRequirements{
 						Requests: map[corev1.ResourceName]resource.Quantity{
 							corev1.ResourceStorage: desiredPvStorage,

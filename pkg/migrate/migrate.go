@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/replicatedhq/pvmigrate/pkg/k8sutil"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -173,7 +174,7 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
-			sourcePvcName, destPvcName := nsPvc.Name, newPvcName(nsPvc.Name)
+			sourcePvcName, destPvcName := nsPvc.Name, k8sutil.NewPvcName(nsPvc.Name)
 			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
 
 			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime, rsyncFlags)
@@ -346,15 +347,17 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 	podArgs = append(podArgs, rsyncFlags...)
 	podArgs = append(podArgs, "/source/", "/dest")
 
+	podName := k8sutil.NewPrefixedName("migrate", sourcePvcName)
+
 	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "migrate-" + sourcePvcName,
+			Name:      podName,
 			Namespace: ns,
-			Labels: map[string]string{
+			Annotations: map[string]string{
 				baseAnnotation: sourcePvcName,
 				kindAnnotation: "migrate",
 			},
@@ -471,7 +474,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
-			newName := newPvcName(nsPvc.Name)
+			newName := k8sutil.NewPvcName(nsPvc.Name)
 
 			desiredPV, ok := pvsByName[nsPvc.Spec.VolumeName]
 			if !ok {
@@ -516,7 +519,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      newName,
 					Namespace: ns,
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: nsPvc.Name,
 						kindAnnotation: "dest",
 					},
@@ -574,24 +577,6 @@ func validateStorageClasses(ctx context.Context, w *log.Logger, clientset k8scli
 	}
 	w.Printf("\nMigrating data from %s to %s\n", sourceSCName, destSCName)
 	return nil
-}
-
-const nameSuffix = "-pvcmigrate"
-
-// if the length after adding the suffix is more than 63 characters, we need to reduce that to fit within k8s limits
-// pruning from the end runs the risk of dropping the '0'/'1'/etc of a statefulset's PVC name
-// pruning from the front runs the risk of making a-replica-... and b-replica-... collide
-// so this removes characters from the middle of the string
-// TODO: refactor to k8sutil package
-func newPvcName(originalName string) string {
-	candidate := originalName + nameSuffix
-	if len(candidate) <= 63 {
-		return candidate
-	}
-
-	// remove characters from the middle of the string to reduce the total length to 63 characters
-	newCandidate := candidate[0:31] + candidate[len(candidate)-32:]
-	return newCandidate
 }
 
 // get a PV, apply the selected mutator to the PV, update the PV, use the supplied validator to wait for the update to show up
@@ -782,7 +767,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 			if len(nsPod.OwnerReferences) == 0 {
 				// if this was a migrate job that wasn't cleaned up properly, delete it
 				// (if it's still running, rsync will happily resume when we get back to it)
-				if _, ok := nsPod.Labels[baseAnnotation]; ok {
+				if _, ok := nsPod.Annotations[baseAnnotation]; ok {
 					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
 					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
 					if err != nil {
@@ -975,9 +960,9 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	if err != nil {
 		return fmt.Errorf("failed to get original PVC %s in %s: %w", pvcName, ns, err)
 	}
-	migratedPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, newPvcName(pvcName), metav1.GetOptions{})
+	migratedPVC, err := clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, k8sutil.NewPvcName(pvcName), metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get migrated PVC %s in %s: %w", newPvcName(pvcName), ns, err)
+		return fmt.Errorf("failed to get migrated PVC %s in %s: %w", k8sutil.NewPvcName(pvcName), ns, err)
 	}
 
 	// mark PVs used by both originalPVC and migratedPVC as to-be-retained
@@ -1018,10 +1003,10 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	if err != nil {
 		return fmt.Errorf("failed to delete original PVC %s in %s: %w", pvcName, ns, err)
 	}
-	w.Printf("Deleting migrated-to PVC %s in %s to release the PV\n", newPvcName(pvcName), ns)
-	err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, newPvcName(pvcName), metav1.DeleteOptions{})
+	w.Printf("Deleting migrated-to PVC %s in %s to release the PV\n", k8sutil.NewPvcName(pvcName), ns)
+	err = clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, k8sutil.NewPvcName(pvcName), metav1.DeleteOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to delete migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)
+		return fmt.Errorf("failed to delete migrated-to PVC %s in %s: %w", k8sutil.NewPvcName(pvcName), ns, err)
 	}
 
 	// wait for the deleted PVCs to actually no longer exist
@@ -1030,10 +1015,10 @@ func swapPVs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	if err != nil {
 		return fmt.Errorf("failed to ensure deletion of original PVC %s in %s: %w", pvcName, ns, err)
 	}
-	w.Printf("Waiting for migrated-to PVC %s in %s to finish deleting\n", newPvcName(pvcName), ns)
-	err = waitForDeletion(ctx, clientset, newPvcName(pvcName), ns)
+	w.Printf("Waiting for migrated-to PVC %s in %s to finish deleting\n", k8sutil.NewPvcName(pvcName), ns)
+	err = waitForDeletion(ctx, clientset, k8sutil.NewPvcName(pvcName), ns)
 	if err != nil {
-		return fmt.Errorf("failed to ensure deletion of migrated-to PVC %s in %s: %w", newPvcName(pvcName), ns, err)
+		return fmt.Errorf("failed to ensure deletion of migrated-to PVC %s in %s: %w", k8sutil.NewPvcName(pvcName), ns, err)
 	}
 
 	// remove claimrefs from original and migrated-to PVs

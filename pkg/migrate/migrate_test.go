@@ -945,7 +945,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -1019,7 +1019,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -1115,7 +1115,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -1196,7 +1196,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -2078,7 +2078,7 @@ func Test_scaleDownPods(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "migrationpod",
 						Namespace: "ns1",
-						Labels: map[string]string{
+						Annotations: map[string]string{
 							baseAnnotation: "test",
 						},
 					},

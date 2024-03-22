@@ -347,15 +347,17 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 	podArgs = append(podArgs, rsyncFlags...)
 	podArgs = append(podArgs, "/source/", "/dest")
 
+	podName := k8sutil.NewPrefixedName("migrate", sourcePvcName)
+
 	createdPod, err := clientset.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "migrate-" + sourcePvcName,
+			Name:      podName,
 			Namespace: ns,
-			Labels: map[string]string{
+			Annotations: map[string]string{
 				baseAnnotation: sourcePvcName,
 				kindAnnotation: "migrate",
 			},
@@ -517,7 +519,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      newName,
 					Namespace: ns,
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: nsPvc.Name,
 						kindAnnotation: "dest",
 					},
@@ -765,7 +767,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 			if len(nsPod.OwnerReferences) == 0 {
 				// if this was a migrate job that wasn't cleaned up properly, delete it
 				// (if it's still running, rsync will happily resume when we get back to it)
-				if _, ok := nsPod.Labels[baseAnnotation]; ok {
+				if _, ok := nsPod.Annotations[baseAnnotation]; ok {
 					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
 					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
 					if err != nil {

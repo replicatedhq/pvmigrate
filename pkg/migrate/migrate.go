@@ -54,6 +54,8 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	PreSyncMode          bool
+	RWXOnly              bool
+	MaxPVs               int
 	SkipSourceValidation bool
 	PodReadyTimeout      time.Duration
 	DeletePVTimeout      time.Duration
@@ -449,12 +451,15 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	matchingPVCsCount := 0
 	matchingPVCs := map[string][]*corev1.PersistentVolumeClaim{}
 	for _, pv := range matchingPVs {
+		if opts.MaxPVs > 0 && matchingPVCsCount >= opts.MaxPVs {
+			break
+		}
 		if pv.Spec.ClaimRef != nil {
 			if len(opts.Namespace) > 0 && pv.Spec.ClaimRef.Namespace != opts.Namespace {
 				continue // early continue, to prevent logging info regarding PV/PVCs in other namespaces
 			}
 
-			if opts.PreSyncMode && !slices.Contains(pv.Spec.AccessModes, v1.ReadWriteMany) {
+			if (opts.RWXOnly || opts.PreSyncMode) && !slices.Contains(pv.Spec.AccessModes, v1.ReadWriteMany) {
 				w.Printf("PV %s for PVC %s does not support RWX access mode, skipping it.", pv.Name, pv.Spec.ClaimRef.Name)
 				continue
 			}

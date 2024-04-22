@@ -93,7 +93,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: prometheus-kube-prometheus-stack-prometheus-db-prometheus-kube-prometheus-stack-prometheus-0
+  name: very-long-prometheus-pvc-name
 spec:
   replicas: 1
   selector:

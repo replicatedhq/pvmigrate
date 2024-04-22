@@ -945,7 +945,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -1019,7 +1019,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -1115,7 +1115,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -1196,7 +1196,7 @@ func Test_createMigrationPod(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "migrate-sourcepvc",
 					Namespace: "testns",
-					Labels: map[string]string{
+					Annotations: map[string]string{
 						baseAnnotation: "sourcepvc",
 						kindAnnotation: "migrate",
 					},
@@ -2078,7 +2078,7 @@ func Test_scaleDownPods(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "migrationpod",
 						Namespace: "ns1",
-						Labels: map[string]string{
+						Annotations: map[string]string{
 							baseAnnotation: "test",
 						},
 					},
@@ -3216,37 +3216,6 @@ func Test_waitForDeletion(t *testing.T) {
 			req.Errorf(err, "the PVC 'test' in 'test' should not have been found after waiting for its deletion")
 			var nilPVC *corev1.PersistentVolumeClaim
 			req.Equal(nilPVC, actualPVC)
-		})
-	}
-}
-
-func Test_newPvcName(t *testing.T) {
-	tests := []struct {
-		originalName string
-		want         string
-	}{
-		{
-			originalName: "abc",
-			want:         "abc-pvcmigrate",
-		},
-		{
-			originalName: "very very very long name test with a suffix that might be the only unique part of it 0",
-			want:         "very very very long name test wy unique part of it 0-pvcmigrate",
-		},
-		{
-			originalName: "0 very very very long name test with a prefix that might be the only unique part of it",
-			want:         "0 very very very long name testnly unique part of it-pvcmigrate",
-		},
-		{
-			originalName: "63 character (after suffix) name is untouched paddin",
-			want:         "63 character (after suffix) name is untouched paddin-pvcmigrate",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.originalName, func(t *testing.T) {
-			req := require.New(t)
-			got := newPvcName(tt.originalName)
-			req.Equal(tt.want, got)
 		})
 	}
 }

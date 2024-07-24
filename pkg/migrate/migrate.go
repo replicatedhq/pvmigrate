@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/replicatedhq/pvmigrate/pkg/k8sutil"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -50,6 +53,9 @@ type Options struct {
 	Namespace            string
 	SetDefaults          bool
 	VerboseCopy          bool
+	PreSyncMode          bool
+	RWXOnly              bool
+	MaxPVs               int
 	SkipSourceValidation bool
 	PodReadyTimeout      time.Duration
 	DeletePVTimeout      time.Duration
@@ -62,34 +68,42 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)
+	if options.PreSyncMode {
+		w.Println("\nRunning in pre-sync-mode, i.e., not scaling down existing pods.\nPV not supporting RWX/ReadWriteMany access mode will be skipped")
+	}
+
+	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, &options)
 	if err != nil {
 		return err
 	}
 
-	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
-	if err != nil {
-		return fmt.Errorf("failed to scale down pods: %w", err)
-	}
-
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Second, options.RsyncFlags)
-	if err != nil {
-		return err
-	}
-
-	for ns, nsPVCs := range matchingPVCs {
-		for _, nsPVC := range nsPVCs {
-			err = swapPVs(ctx, w, clientset, ns, nsPVC.Name)
-			if err != nil {
-				return fmt.Errorf("failed to swap PVs for PVC %s in %s: %w", nsPVC.Name, ns, err)
-			}
+	if !options.PreSyncMode {
+		err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
+		if err != nil {
+			return fmt.Errorf("failed to scale down pods: %w", err)
 		}
 	}
 
-	// scale back deployments/daemonsets/statefulsets
-	err = scaleUpPods(ctx, w, clientset, namespaces)
+	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, matchingPVCs, options.VerboseCopy, time.Second, options.RsyncFlags)
 	if err != nil {
-		return fmt.Errorf("failed to scale up pods: %w", err)
+		return err
+	}
+
+	if !options.PreSyncMode {
+		for ns, nsPVCs := range matchingPVCs {
+			for _, nsPVC := range nsPVCs {
+				err = swapPVs(ctx, w, clientset, ns, nsPVC.Name)
+				if err != nil {
+					return fmt.Errorf("failed to swap PVs for PVC %s in %s: %w", nsPVC.Name, ns, err)
+				}
+			}
+		}
+
+		// scale back deployments/daemonsets/statefulsets
+		err = scaleUpPods(ctx, w, clientset, namespaces)
+		if err != nil {
+			return fmt.Errorf("failed to scale up pods: %w", err)
+		}
 	}
 
 	if options.SetDefaults {
@@ -416,7 +430,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to arrays of original PVCs
 // an array of namespaces that the PVCs were found within
 // an error, if one was encountered
-func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]*corev1.PersistentVolumeClaim, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, opts *Options) (map[string][]*corev1.PersistentVolumeClaim, []string, error) {
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -425,26 +439,43 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	matchingPVs := []corev1.PersistentVolume{}
 	pvsByName := map[string]corev1.PersistentVolume{}
 	for _, pv := range pvs.Items {
-		if pv.Spec.StorageClassName == sourceSCName {
+		if pv.Spec.StorageClassName == opts.SourceSCName {
 			matchingPVs = append(matchingPVs, pv)
 			pvsByName[pv.Name] = pv
 		} else {
-			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, sourceSCName)
+			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, opts.SourceSCName)
 		}
 	}
 
 	// get PVCs using specified PVs
+	matchingPVCsCount := 0
 	matchingPVCs := map[string][]*corev1.PersistentVolumeClaim{}
 	for _, pv := range matchingPVs {
+		if opts.MaxPVs > 0 && matchingPVCsCount >= opts.MaxPVs {
+			break
+		}
 		if pv.Spec.ClaimRef != nil {
+			if len(opts.Namespace) > 0 && pv.Spec.ClaimRef.Namespace != opts.Namespace {
+				continue // early continue, to prevent logging info regarding PV/PVCs in other namespaces
+			}
+
+			if (opts.RWXOnly || opts.PreSyncMode) && !slices.Contains(pv.Spec.AccessModes, v1.ReadWriteMany) {
+				w.Printf("PV %s for PVC %s does not support RWX access mode, skipping it.", pv.Name, pv.Spec.ClaimRef.Name)
+				continue
+			}
+
+			if strings.HasSuffix(pv.Spec.ClaimRef.Name, k8sutil.PVCNameSuffix) {
+				w.Printf("Skipping PV %s as the claiming PVC has the %s suffix", pv.Name, k8sutil.PVCNameSuffix)
+				continue
+			}
+
 			pvc, err := clientset.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(ctx, pv.Spec.ClaimRef.Name, metav1.GetOptions{})
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 
-			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
-				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvc)
-			}
+			matchingPVCsCount++
+			matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvc)
 
 		} else {
 			return nil, nil, fmt.Errorf("PV %s does not have an associated PVC - resolve this before rerunning", pv.Name)
@@ -456,7 +487,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		pvcNamespaces = append(pvcNamespaces, idx)
 	}
 
-	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", len(matchingPVCs), len(pvcNamespaces))
+	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", matchingPVCsCount, len(pvcNamespaces))
 	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "namespace:\tpvc:\tpv:\tsize:\t\n")
 	for ns, nsPvcs := range matchingPVCs {
@@ -471,7 +502,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	}
 
 	// create new PVCs for each matching PVC
-	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
+	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", opts.DestSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
 			newName := k8sutil.NewPvcName(nsPvc.Name)
@@ -493,7 +524,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 					return nil, nil, fmt.Errorf("failed to find existing PVC: %w", err)
 				}
 			} else if existingPVC != nil {
-				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == destSCName {
+				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == opts.DestSCName {
 					existingSize := existingPVC.Spec.Resources.Requests.Storage().String()
 
 					if existingSize == desiredPvStorage.String() {
@@ -525,7 +556,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 					},
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: &destSCName,
+					StorageClassName: &opts.DestSCName,
 					Resources: corev1.VolumeResourceRequirements{
 						Requests: map[corev1.ResourceName]resource.Quantity{
 							corev1.ResourceStorage: desiredPvStorage,
@@ -675,9 +706,7 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
 // It returns a map of namespace to PVCs and any errors encountered.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, checkInterval time.Duration) (map[string][]*corev1.PersistentVolumeClaim, error) {
-	// build new map with complete pvcCtx
-	updatedPVCs := matchingPVCs
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
 
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
@@ -685,7 +714,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	for ns, nsPvcs := range matchingPVCs {
 		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
+			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
 		}
 		for _, nsPod := range nsPods.Items {
 		perPodLoop:
@@ -706,7 +735,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	for ns, nsPvcs := range matchingPVCs {
 		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
+			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
 		}
 		for _, nsPod := range nsPods.Items {
 			for _, podVol := range nsPod.Spec.Volumes {
@@ -728,7 +757,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 								return volume.Annotations[sourceNodeAnnotation] == nsPod.Spec.NodeName
 							})
 							if err != nil {
-								return nil, fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.ObjectMeta.Name, nsPod.Spec.NodeName, err)
+								return fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.ObjectMeta.Name, nsPod.Spec.NodeName, err)
 							}
 						}
 					}
@@ -747,7 +776,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	}
 	err := tw.Flush()
 	if err != nil {
-		return nil, fmt.Errorf("failed to print Pods: %w", err)
+		return fmt.Errorf("failed to print Pods: %w", err)
 	}
 
 	// get owners controlling specified pods
@@ -771,11 +800,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
 					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
+						return fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
 					}
 				} else {
 					// TODO: handle properly
-					return nil, fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
+					return fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
 				}
 			}
 		}
@@ -791,7 +820,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				case "StatefulSet":
 					ss, err := clientset.AppsV1().StatefulSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -812,24 +841,24 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				case "ReplicaSet":
 					rs, err := clientset.AppsV1().ReplicaSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
 					}
 
 					if len(rs.OwnerReferences) != 1 {
-						return nil, fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
+						return fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
 					}
 					if rs.OwnerReferences[0].Kind != "Deployment" {
-						return nil, fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
+						return fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
 					}
 
 					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, rs.OwnerReferences[0].Name, metav1.GetOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -850,10 +879,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				default:
-					return nil, fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
+					return fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
 				}
 			}
 		}
@@ -867,7 +896,7 @@ checkPvcPodLoop:
 		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {
-				return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
+				return fmt.Errorf("failed to get pods in %s: %w", ns, err)
 			}
 			for _, nsPod := range nsPods.Items {
 				for _, podVol := range nsPod.Spec.Volumes {
@@ -875,7 +904,7 @@ checkPvcPodLoop:
 						for _, nsClaim := range nsPvcs {
 							if podVol.PersistentVolumeClaim.ClaimName == nsClaim.Name {
 								if nsPod.CreationTimestamp.After(migrationStartTime) {
-									return nil, fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
+									return fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
 								}
 
 								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, waiting\n", nsPod.Name, ns, nsClaim.Name)
@@ -892,7 +921,7 @@ checkPvcPodLoop:
 	}
 
 	w.Printf("All pods removed successfully\n")
-	return updatedPVCs, nil
+	return nil
 }
 
 func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, namespaces []string) error {

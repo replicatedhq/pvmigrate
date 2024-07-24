@@ -116,6 +116,11 @@ echo ""
 spinner_until 120 deployment_fully_updated default short-pvc-name
 echo ""
 echo "'short-pvc-name' deployment healthy"
+echo "waiting for the 'very-long-prometheus-pvc-name' deployment"
+echo ""
+spinner_until 120 deployment_fully_updated default very-long-prometheus-pvc-name
+echo ""
+echo "'very-long-prometheus-pvc-name' deployment healthy"
 
 kubectl get statefulsets
 kubectl get deployments

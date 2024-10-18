@@ -895,7 +895,8 @@ func TestGetPVCs(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName, test.namespace)
+			opts := Options{SourceSCName: test.sourceScName, DestSCName: test.destScName, Namespace: test.namespace}
+			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, &opts)
 			if !test.wantErr {
 				req.NoError(err)
 			} else {
@@ -2769,7 +2770,7 @@ func Test_scaleDownPods(t *testing.T) {
 			if tt.backgroundFunc != nil {
 				go tt.backgroundFunc(testCtx, testlog, clientset)
 			}
-			actualMatchingPVCs, err := scaleDownPods(testCtx, testlog, clientset, tt.matchingPVCs, time.Second/20)
+			err := scaleDownPods(testCtx, testlog, clientset, tt.matchingPVCs, time.Second/20)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("got expected error %q", err.Error())
@@ -2796,7 +2797,6 @@ func Test_scaleDownPods(t *testing.T) {
 			req.Equal(tt.wantPods, actualPods)
 			req.Equal(tt.wantDeployments, actualDeployments)
 			req.Equal(tt.wantSS, actualSS)
-			req.Equal(tt.wantMatchingPVCs, actualMatchingPVCs)
 
 			actualPVs, err := clientset.CoreV1().PersistentVolumes().List(testCtx, metav1.ListOptions{})
 			req.NoError(err)
@@ -3487,7 +3487,15 @@ func Test_copyAllPVCs(t *testing.T) {
 				}
 			}(testCtx, testlog, clientset, tt.events)
 
-			err := copyAllPVCs(testCtx, testlog, clientset, "sourcesc", "destsc", "testrsyncimage", tt.matchingPVCs, false, time.Millisecond*10, nil)
+			options := Options{
+				SourceSCName: "sourcesc",
+				DestSCName:   "destsc",
+				RsyncImage:   "testrsyncimage",
+				RsyncFlags:   nil,
+				VerboseCopy:  false,
+			}
+
+			err := copyAllPVCs(testCtx, testlog, clientset, &options, tt.matchingPVCs, time.Millisecond*10)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("got expected error %q", err.Error())

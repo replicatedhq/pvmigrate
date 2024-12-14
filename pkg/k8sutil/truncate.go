@@ -2,14 +2,14 @@ package k8sutil
 
 import "fmt"
 
-const nameSuffix = "-pvcmigrate"
+const PVCNameSuffix = "-pvcmigrate"
 
 // if the length after adding the suffix is more than 253 characters, we need to reduce that to fit within k8s limits
 // pruning from the end runs the risk of dropping the '0'/'1'/etc of a statefulset's PVC name
 // pruning from the front runs the risk of making a-replica-... and b-replica-... collide
 // so this removes characters from the middle of the string
 func NewPvcName(originalName string) string {
-	candidate := originalName + nameSuffix
+	candidate := originalName + PVCNameSuffix
 	if len(candidate) <= 253 {
 		return candidate
 	}

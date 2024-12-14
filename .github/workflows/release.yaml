@@ -15,7 +15,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Test
         run: make test
@@ -28,7 +29,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Build
         run: make build
@@ -45,6 +47,32 @@ jobs:
       - name: Validate Cluster End State
         run: ./testing/validate.sh
 
+  integration-test-presync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: make build
+
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1.10.0
+
+      - name: Create Testdata in Cluster
+        run: ./testing/init.sh
+
+      - name: Run PVMigrate
+        run: ./bin/pvmigrate --source-sc int-source --dest-sc int-dest --pre-sync-mode
+
+      - name: Validate Cluster End State
+        run: ./testing/validate.sh
+
   integration-test-incluster:
     runs-on: ubuntu-latest
     steps:
@@ -53,7 +81,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -80,6 +109,7 @@ jobs:
       - unit-test
       - integration-test
       - integration-test-incluster
+      - integration-test-presync
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
@@ -90,7 +120,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

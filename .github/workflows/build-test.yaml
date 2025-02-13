@@ -16,7 +16,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Test
         run: make test
@@ -29,7 +30,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Build
         run: make build
@@ -46,6 +48,32 @@ jobs:
       - name: Validate Cluster End State
         run: ./testing/validate.sh
 
+  integration-test-presync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: make build
+
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1.10.0
+
+      - name: Create Testdata in Cluster
+        run: ./testing/init.sh
+
+      - name: Run PVMigrate
+        run: ./bin/pvmigrate --source-sc int-source --dest-sc int-dest --pre-sync-mode
+
+      - name: Validate Cluster End State
+        run: ./testing/validate.sh
+
   integration-test-incluster:
     runs-on: ubuntu-latest
     steps:
@@ -54,7 +82,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -74,3 +103,31 @@ jobs:
 
       - name: Validate Cluster End State
         run: ./testing/validate.sh
+
+  # this job will validate that all the tests passed
+  # it is used for the github branch protection rule
+  validate-success:
+    name: Validate success
+    runs-on: ubuntu-24.04
+    needs:
+      - unit-test
+      - integration-test
+      - integration-test-presync
+      - integration-test-incluster
+    if: always()
+    steps:
+      # https://docs.github.com/en/actions/learn-github-actions/contexts#needs-context
+      - name: fail if unit-test job was not successful
+        if: needs.unit-test.result != 'success'
+        run: exit 1
+      - name: fail if integration-test job was not successful
+        if: needs.integration-test.result != 'success'
+        run: exit 1
+      - name: fail if integration-test-presync job was not successful
+        if: needs.integration-test-presync.result != 'success'
+        run: exit 1
+      - name: fail if integration-test-incluster job was not successful
+        if: needs.integration-test-incluster.result != 'success'
+        run: exit 1
+      - name: succeed if everything else passed
+        run: echo "Validation succeeded"

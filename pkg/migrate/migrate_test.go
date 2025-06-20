@@ -81,7 +81,7 @@ func TestScaleUpPods(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if _, ok := ns1Set.ObjectMeta.Annotations[scaleAnnotation]; ok {
+				if _, ok := ns1Set.Annotations[scaleAnnotation]; ok {
 					// this annotation should have been deleted
 					return fmt.Errorf("ss ns1 in ns1 still had annotation %s", scaleAnnotation)
 				}
@@ -93,7 +93,7 @@ func TestScaleUpPods(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if _, ok := ns2Set.ObjectMeta.Annotations[scaleAnnotation]; !ok {
+				if _, ok := ns2Set.Annotations[scaleAnnotation]; !ok {
 					// this annotation should not have been deleted
 					return fmt.Errorf("ss ns2 in ns2 did not have annotation %s", scaleAnnotation)
 				}

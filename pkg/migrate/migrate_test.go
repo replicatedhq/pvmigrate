@@ -202,7 +202,7 @@ func TestScaleUpPods(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := scaleUpPods(t.Context(), testlog, clientset, test.namespaces)
+			err := scaleUpPods(context.Background(), testlog, clientset, test.namespaces)
 			req.NoError(err)
 
 			err = test.validate(clientset, t)
@@ -261,7 +261,7 @@ func TestMutatePV(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := mutatePV(t.Context(), testlog, clientset, test.pvname, test.ttmutator, test.ttchecker)
+			err := mutatePV(context.Background(), testlog, clientset, test.pvname, test.ttmutator, test.ttchecker)
 			req.NoError(err)
 
 			err = test.validate(clientset, t)
@@ -343,7 +343,7 @@ func TestValidateStorageClasses(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := validateStorageClasses(t.Context(), testlog, clientset, test.sourceSC, test.destSC, test.skipSourceValidation)
+			err := validateStorageClasses(context.Background(), testlog, clientset, test.sourceSC, test.destSC, test.skipSourceValidation)
 			if !test.wantErr {
 				req.NoError(err)
 			} else {
@@ -895,7 +895,7 @@ func TestGetPVCs(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			originalPVCs, nses, err := getPVCs(t.Context(), testlog, clientset, test.sourceScName, test.destScName, test.namespace)
+			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName, test.namespace)
 			if !test.wantErr {
 				req.NoError(err)
 			} else {
@@ -1266,7 +1266,7 @@ func Test_createMigrationPod(t *testing.T) {
 				tt.setGlobalFunc()
 			}
 
-			got, err := createMigrationPod(t.Context(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage, tt.args.nodeName, tt.args.rsyncFlags)
+			got, err := createMigrationPod(context.Background(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage, tt.args.nodeName, tt.args.rsyncFlags)
 
 			if tt.clearGlobalFunc != nil {
 				tt.clearGlobalFunc()
@@ -1816,21 +1816,21 @@ func Test_swapPVs(t *testing.T) {
 			testlog := log.New(testWriter{t: t}, "", 0)
 
 			if tt.backgroundFunc != nil {
-				go tt.backgroundFunc(t.Context(), testlog, clientset)
+				go tt.backgroundFunc(context.Background(), testlog, clientset)
 			}
 
-			err := swapPVs(t.Context(), testlog, clientset, tt.ns, tt.pvcName)
+			err := swapPVs(context.Background(), testlog, clientset, tt.ns, tt.pvcName)
 			if tt.wantErr {
 				req.Error(err)
 				return
 			}
 			req.NoError(err)
 
-			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(t.Context(), metav1.ListOptions{})
+			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
 			req.Equal(tt.wantPVs, finalPVs.Items)
 
-			finalPVCs, err := clientset.CoreV1().PersistentVolumeClaims(tt.ns).List(t.Context(), metav1.ListOptions{})
+			finalPVCs, err := clientset.CoreV1().PersistentVolumeClaims(tt.ns).List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
 			req.Equal(tt.wantPVCs, finalPVCs.Items)
 		})
@@ -2009,14 +2009,14 @@ func Test_resetReclaimPolicy(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := resetReclaimPolicy(t.Context(), testlog, clientset, tt.pv, tt.reclaim)
+			err := resetReclaimPolicy(context.Background(), testlog, clientset, tt.pv, tt.reclaim)
 			if tt.wantErr {
 				req.Error(err)
 				return
 			}
 			req.NoError(err)
 
-			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(t.Context(), metav1.ListOptions{})
+			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
 			req.Equal(tt.wantPVs, finalPVs.Items)
 		})
@@ -2762,7 +2762,7 @@ func Test_scaleDownPods(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			testCtx, cancelfunc := context.WithTimeout(t.Context(), time.Minute) // if your test takes more than 1m, there are issues
+			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
@@ -3158,7 +3158,7 @@ func Test_swapDefaults(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
-			err := swapDefaultStorageClasses(t.Context(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
+			err := swapDefaultStorageClasses(context.Background(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
 			if tt.wantErr {
 				req.Error(err)
 				testlog.Printf("Got expected error %s", err.Error())
@@ -3166,7 +3166,7 @@ func Test_swapDefaults(t *testing.T) {
 			}
 			req.NoError(err)
 
-			finalSCs, err := clientset.StorageV1().StorageClasses().List(t.Context(), metav1.ListOptions{})
+			finalSCs, err := clientset.StorageV1().StorageClasses().List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
 			req.Equal(tt.wantSCs, finalSCs.Items)
 		})
@@ -3194,7 +3194,7 @@ func Test_waitForDeletion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			testCtx, cancelfunc := context.WithTimeout(t.Context(), time.Minute) // if your test takes more than 1m, there are issues
+			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
 			clientset := fake.NewSimpleClientset(
 				[]runtime.Object{
@@ -3442,7 +3442,7 @@ func Test_copyAllPVCs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			testCtx, cancelfunc := context.WithTimeout(t.Context(), time.Second*10) // if your test takes more than 10s, there are issues
+			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Second*10) // if your test takes more than 10s, there are issues
 			defer cancelfunc()
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)

@@ -270,7 +270,7 @@ func checkVolumeAccessModes(ctx context.Context, l *log.Logger, client k8sclient
 			// but the pod has not been scheduled yet, nor have container images been pulled from the registry.
 			if gotPod.Status.Phase == corev1.PodPending {
 				// check pvc status and get error
-				pvcPendingError, err := getPVCError(client, tmpPVC)
+				pvcPendingError, err := getPVCError(ctx, client, tmpPVC)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get pvc failure: %w", err)
 				}
@@ -356,13 +356,13 @@ func deletePVConsumerPod(client k8sclient.Interface, pod *corev1.Pod) error {
 }
 
 // getPVCError returns the failure event for why a PVC is in Pending status
-func getPVCError(client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) (*pvcFailure, error) {
+func getPVCError(ctx context.Context, client k8sclient.Interface, pvc *corev1.PersistentVolumeClaim) (*pvcFailure, error) {
 	// no need to inspect pvc if it's NOT in Pending phase
 	if pvc.Status.Phase != corev1.ClaimPending {
 		return nil, fmt.Errorf("PVC %s is not in Pending status", pvc.Name)
 	}
 
-	pvcEvents, err := client.CoreV1().Events(pvc.Namespace).Search(scheme.Scheme, pvc)
+	pvcEvents, err := client.CoreV1().Events(pvc.Namespace).SearchWithContext(ctx, scheme.Scheme, pvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list events for PVC %s: %w", pvc.Name, err)
 	}

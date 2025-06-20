@@ -113,7 +113,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 			req := require.New(t)
 			kcli := fake.NewSimpleClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
-			result, err := validateVolumeAccessModes(context.Background(), logger, kcli, tt.dstSC, "eeacms/rsync:2.3", tt.podReadyTimeout, tt.deletePVTimeout, tt.input)
+			result, err := validateVolumeAccessModes(t.Context(), logger, kcli, tt.dstSC, "eeacms/rsync:2.3", tt.podReadyTimeout, tt.deletePVTimeout, tt.input)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -292,7 +292,7 @@ func Test_getPvcError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
 			kcli := fake.NewSimpleClientset(tt.resources...)
-			result, err := getPVCError(kcli, tt.input)
+			result, err := getPVCError(t.Context(), kcli, tt.input)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -429,14 +429,14 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
+			testCtx, cancelfunc := context.WithTimeout(t.Context(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
 			kcli := fake.NewSimpleClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
 			if tt.backgroundFunc != nil {
 				go tt.backgroundFunc(testCtx, logger, kcli, tt.tmpPodName, "default", "pv-for-pf-pvc-testpvc")
 			}
-			result, err := checkVolumeAccessModes(context.Background(), logger, kcli, tt.dstStorageClass, *tt.input, tt.podTimeout, tt.deletePVTimeout, "eeacms/rsync:2.3")
+			result, err := checkVolumeAccessModes(t.Context(), logger, kcli, tt.dstStorageClass, *tt.input, tt.podTimeout, tt.deletePVTimeout, "eeacms/rsync:2.3")
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -893,7 +893,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 			req := require.New(t)
 			kcli := fake.NewSimpleClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
-			result, err := pvcsForStorageClass(context.Background(), logger, kcli, tt.scname, tt.namespace)
+			result, err := pvcsForStorageClass(t.Context(), logger, kcli, tt.scname, tt.namespace)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
@@ -987,7 +987,7 @@ func Test_validateStorageClasses(t *testing.T) {
 			req := require.New(t)
 			clientset := fake.NewSimpleClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
-			result, err := validateStorageClasses(context.Background(), logger, clientset, tt.sourceSC, tt.destSC, tt.skipSourceSCValidation)
+			result, err := validateStorageClasses(t.Context(), logger, clientset, tt.sourceSC, tt.destSC, tt.skipSourceSCValidation)
 			if !tt.wantErr {
 				req.NoError(err)
 			} else {
@@ -1100,7 +1100,7 @@ func Test_deleteTmpPVCs(t *testing.T) {
 			backgroundFunc: func(t *testing.T, kcli k8sclient.Interface) {
 				time.Sleep(6 * time.Second)
 				if err := kcli.CoreV1().PersistentVolumes().Delete(
-					context.Background(), "pv", metav1.DeleteOptions{},
+					t.Context(), "pv", metav1.DeleteOptions{},
 				); err != nil {
 					t.Errorf("failed to delete test pv: %s", err)
 				}
@@ -1189,7 +1189,7 @@ func Test_deleteTmpPVCs(t *testing.T) {
 			backgroundFunc: func(t *testing.T, kcli k8sclient.Interface) {
 				time.Sleep(6 * time.Second)
 				if err := kcli.CoreV1().PersistentVolumes().Delete(
-					context.Background(), "pv", metav1.DeleteOptions{},
+					t.Context(), "pv", metav1.DeleteOptions{},
 				); err != nil {
 					t.Errorf("failed to delete test pv: %s", err)
 				}

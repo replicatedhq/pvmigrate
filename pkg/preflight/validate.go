@@ -65,13 +65,13 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 // PrintPVAccessModeErrors prints and formats the volume access mode errors in pvcErrors
 func PrintValidationFailures(stream io.Writer, failures []ValidationFailure) {
 	tw := tabwriter.NewWriter(stream, 0, 8, 8, '\t', 0)
-	fmt.Fprintf(tw, "The following resources failed validation:\n")
-	fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tMESSAGE")
-	fmt.Fprintf(tw, "---------\t--------\t-------\n")
+	_, _ = fmt.Fprintf(tw, "The following resources failed validation:\n")
+	_, _ = fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tMESSAGE")
+	_, _ = fmt.Fprintf(tw, "---------\t--------\t-------\n")
 	for _, failure := range failures {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", failure.Namespace, failure.Resource, failure.Message)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", failure.Namespace, failure.Resource, failure.Message)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 }
 
 func toValidationFailures(pvcFailures map[string]map[string]pvcFailure) []ValidationFailure {

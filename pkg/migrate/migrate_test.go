@@ -12,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -3212,10 +3213,8 @@ func Test_waitForDeletion(t *testing.T) {
 			}
 			err := waitForDeletion(testCtx, clientset, "test", "test")
 			req.NoError(err)
-			actualPVC, err := clientset.CoreV1().PersistentVolumeClaims("test").Get(testCtx, "test", metav1.GetOptions{})
-			req.Errorf(err, "the PVC 'test' in 'test' should not have been found after waiting for its deletion")
-			var nilPVC *corev1.PersistentVolumeClaim
-			req.Equal(nilPVC, actualPVC)
+			_, err = clientset.CoreV1().PersistentVolumeClaims("test").Get(testCtx, "test", metav1.GetOptions{})
+			req.True(k8serrors.IsNotFound(err), "expected NotFound getting PVC 'test' in 'test' after deletion, got: %v", err)
 		})
 	}
 }

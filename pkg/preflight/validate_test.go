@@ -292,7 +292,7 @@ func Test_getPvcError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
 			kcli := fake.NewSimpleClientset(tt.resources...)
-			result, err := getPVCError(kcli, tt.input)
+			result, err := getPVCError(t.Context(), kcli, tt.input)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)

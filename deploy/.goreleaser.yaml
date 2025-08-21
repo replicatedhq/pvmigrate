@@ -1,3 +1,4 @@
+version: 2
 project_name: pvmigrate
 release:
   github:
@@ -24,12 +25,14 @@ builds:
     hooks: { }
 archives:
   - id: pvmigrate
-    builds:
+    ids:
       - pvmigrate
-    format: tar.gz
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     name_template: 'pvmigrate_{{ .Os }}_{{ .Arch }}'
     files:
       - licence*

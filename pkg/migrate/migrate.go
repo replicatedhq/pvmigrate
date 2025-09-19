@@ -451,6 +451,21 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		}
 	}
 
+	// remove duplicates, ensuring pvcs are unique per namespace
+	for ns, nsPVCs := range matchingPVCs {
+		uniquePVCs := []*corev1.PersistentVolumeClaim{}
+		seen := make(map[string]bool)
+
+		for _, pvc := range nsPVCs {
+			if !seen[pvc.Name] {
+				seen[pvc.Name] = true
+				uniquePVCs = append(uniquePVCs, pvc)
+			}
+		}
+
+		matchingPVCs[ns] = uniquePVCs
+	}
+
 	pvcNamespaces := []string{}
 	for idx := range matchingPVCs {
 		pvcNamespaces = append(pvcNamespaces, idx)

@@ -451,12 +451,29 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		}
 	}
 
+	// remove duplicates, ensuring pvcs are unique per namespace
+	for ns, nsPVCs := range matchingPVCs {
+		uniquePVCs := []*corev1.PersistentVolumeClaim{}
+		seen := make(map[string]bool)
+
+		for _, pvc := range nsPVCs {
+			if !seen[pvc.Name] {
+				seen[pvc.Name] = true
+				uniquePVCs = append(uniquePVCs, pvc)
+			}
+		}
+
+		matchingPVCs[ns] = uniquePVCs
+	}
+
+	numPVCs := 0
 	pvcNamespaces := []string{}
 	for idx := range matchingPVCs {
+		numPVCs += len(matchingPVCs[idx])
 		pvcNamespaces = append(pvcNamespaces, idx)
 	}
 
-	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", len(matchingPVCs), len(pvcNamespaces))
+	w.Printf("\nFound %d matching PVCs to migrate across %d namespaces:\n", numPVCs, len(pvcNamespaces))
 	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "namespace:\tpvc:\tpv:\tsize:\t\n")
 	for ns, nsPvcs := range matchingPVCs {

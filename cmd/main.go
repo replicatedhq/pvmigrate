@@ -75,7 +75,7 @@ func main() {
 	if !skipPreflightValidation {
 		failures, err := preflight.Validate(ctx, logger, clientset, options)
 		if err != nil {
-			logger.Printf("failed to run preflight validation checks")
+			logger.Printf("failed to run preflight validation checks: %s", err)
 			os.Exit(1)
 		}
 

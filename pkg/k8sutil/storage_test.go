@@ -84,7 +84,7 @@ func TestPVCSForPVs(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			kcli := fake.NewSimpleClientset(tt.objs...)
+			kcli := fake.NewClientset(tt.objs...)
 			result, err := PVCSForPVs(context.Background(), kcli, tt.input)
 			if err != nil {
 				if len(tt.err) == 0 {
@@ -227,7 +227,7 @@ func TestPVsByStorageClass(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			kcli := fake.NewSimpleClientset(tt.objs...)
+			kcli := fake.NewClientset(tt.objs...)
 			result, err := PVsByStorageClass(context.Background(), kcli, tt.scname)
 			if err != nil {
 				if len(tt.err) == 0 {

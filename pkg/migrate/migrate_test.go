@@ -30,6 +30,19 @@ func (tw testWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+// clearManagedFields removes ManagedFields from k8s objects so tests can compare
+// against expected objects without worrying about server-side field tracking added
+// by fake.NewClientset.
+func clearManagedFields(obj any) {
+	type hasManagedFields interface {
+		GetManagedFields() []metav1.ManagedFieldsEntry
+		SetManagedFields([]metav1.ManagedFieldsEntry)
+	}
+	if m, ok := obj.(hasManagedFields); ok {
+		m.SetManagedFields(nil)
+	}
+}
+
 func TestScaleUpPods(t *testing.T) {
 	zeroInt := int32(0)
 	tests := []struct {
@@ -201,7 +214,7 @@ func TestScaleUpPods(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(test.resources...)
+			clientset := fake.NewClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := scaleUpPods(context.Background(), testlog, clientset, test.namespaces)
 			req.NoError(err)
@@ -260,7 +273,7 @@ func TestMutatePV(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(test.resources...)
+			clientset := fake.NewClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := mutatePV(context.Background(), testlog, clientset, test.pvname, test.ttmutator, test.ttchecker)
 			req.NoError(err)
@@ -342,7 +355,7 @@ func TestValidateStorageClasses(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(test.resources...)
+			clientset := fake.NewClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := validateStorageClasses(context.Background(), testlog, clientset, test.sourceSC, test.destSC, test.skipSourceValidation)
 			if !test.wantErr {
@@ -894,7 +907,7 @@ func TestGetPVCs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(test.resources...)
+			clientset := fake.NewClientset(test.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			originalPVCs, nses, err := getPVCs(context.Background(), testlog, clientset, test.sourceScName, test.destScName, test.namespace)
 			if !test.wantErr {
@@ -1261,7 +1274,7 @@ func Test_createMigrationPod(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset()
+			clientset := fake.NewClientset()
 
 			if tt.setGlobalFunc != nil {
 				tt.setGlobalFunc()
@@ -1279,6 +1292,7 @@ func Test_createMigrationPod(t *testing.T) {
 			}
 
 			req.NoError(err)
+			clearManagedFields(got)
 			req.Equal(tt.want, got)
 		})
 	}
@@ -1813,7 +1827,7 @@ func Test_swapPVs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 
 			if tt.backgroundFunc != nil {
@@ -1829,10 +1843,16 @@ func Test_swapPVs(t *testing.T) {
 
 			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
+			for i := range finalPVs.Items {
+				clearManagedFields(&finalPVs.Items[i])
+			}
 			req.Equal(tt.wantPVs, finalPVs.Items)
 
 			finalPVCs, err := clientset.CoreV1().PersistentVolumeClaims(tt.ns).List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
+			for i := range finalPVCs.Items {
+				clearManagedFields(&finalPVCs.Items[i])
+			}
 			req.Equal(tt.wantPVCs, finalPVCs.Items)
 		})
 	}
@@ -2008,7 +2028,7 @@ func Test_resetReclaimPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := resetReclaimPolicy(context.Background(), testlog, clientset, tt.pv, tt.reclaim)
 			if tt.wantErr {
@@ -2019,6 +2039,9 @@ func Test_resetReclaimPolicy(t *testing.T) {
 
 			finalPVs, err := clientset.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
+			for i := range finalPVs.Items {
+				clearManagedFields(&finalPVs.Items[i])
+			}
 			req.Equal(tt.wantPVs, finalPVs.Items)
 		})
 	}
@@ -2765,7 +2788,7 @@ func Test_scaleDownPods(t *testing.T) {
 			req := require.New(t)
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			if tt.backgroundFunc != nil {
 				go tt.backgroundFunc(testCtx, testlog, clientset)
@@ -2784,15 +2807,30 @@ func Test_scaleDownPods(t *testing.T) {
 			for _, ns := range tt.nsList {
 				finalNsPods, err := clientset.CoreV1().Pods(ns).List(testCtx, metav1.ListOptions{})
 				req.NoError(err)
+				for i := range finalNsPods.Items {
+					clearManagedFields(&finalNsPods.Items[i])
+				}
 				actualPods[ns] = finalNsPods.Items
 
 				finalNsDeps, err := clientset.AppsV1().Deployments(ns).List(testCtx, metav1.ListOptions{})
 				req.NoError(err)
+				for i := range finalNsDeps.Items {
+					clearManagedFields(&finalNsDeps.Items[i])
+				}
 				actualDeployments[ns] = finalNsDeps.Items
 
 				finalNsSS, err := clientset.AppsV1().StatefulSets(ns).List(testCtx, metav1.ListOptions{})
 				req.NoError(err)
+				for i := range finalNsSS.Items {
+					clearManagedFields(&finalNsSS.Items[i])
+				}
 				actualSS[ns] = finalNsSS.Items
+			}
+			for ns, pvcs := range actualMatchingPVCs {
+				for i := range pvcs {
+					clearManagedFields(pvcs[i])
+				}
+				actualMatchingPVCs[ns] = pvcs
 			}
 			req.Equal(tt.wantPods, actualPods)
 			req.Equal(tt.wantDeployments, actualDeployments)
@@ -2801,6 +2839,9 @@ func Test_scaleDownPods(t *testing.T) {
 
 			actualPVs, err := clientset.CoreV1().PersistentVolumes().List(testCtx, metav1.ListOptions{})
 			req.NoError(err)
+			for i := range actualPVs.Items {
+				clearManagedFields(&actualPVs.Items[i])
+			}
 			req.Equal(tt.wantPVs, actualPVs.Items)
 		})
 	}
@@ -3157,7 +3198,7 @@ func Test_swapDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 			err := swapDefaultStorageClasses(context.Background(), testlog, clientset, tt.oldDefaultSC, tt.newDefaultSC)
 			if tt.wantErr {
@@ -3169,6 +3210,9 @@ func Test_swapDefaults(t *testing.T) {
 
 			finalSCs, err := clientset.StorageV1().StorageClasses().List(context.Background(), metav1.ListOptions{})
 			req.NoError(err)
+			for i := range finalSCs.Items {
+				clearManagedFields(&finalSCs.Items[i])
+			}
 			req.Equal(tt.wantSCs, finalSCs.Items)
 		})
 	}
@@ -3197,7 +3241,7 @@ func Test_waitForDeletion(t *testing.T) {
 			req := require.New(t)
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
-			clientset := fake.NewSimpleClientset(
+			clientset := fake.NewClientset(
 				[]runtime.Object{
 					&corev1.PersistentVolumeClaim{
 						ObjectMeta: metav1.ObjectMeta{
@@ -3443,7 +3487,7 @@ func Test_copyAllPVCs(t *testing.T) {
 			req := require.New(t)
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Second*10) // if your test takes more than 10s, there are issues
 			defer cancelfunc()
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			testlog := log.New(testWriter{t: t}, "", 0)
 
 			// handle making the pods start/succeed/fail/etc

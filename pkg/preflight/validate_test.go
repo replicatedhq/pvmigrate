@@ -111,7 +111,7 @@ func Test_validateVolumeAccessModes(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			kcli := fake.NewSimpleClientset(tt.resources...)
+			kcli := fake.NewClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
 			result, err := validateVolumeAccessModes(context.Background(), logger, kcli, tt.dstSC, "eeacms/rsync:2.3", tt.podReadyTimeout, tt.deletePVTimeout, tt.input)
 			if err != nil {
@@ -291,7 +291,7 @@ func Test_getPvcError(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			kcli := fake.NewSimpleClientset(tt.resources...)
+			kcli := fake.NewClientset(tt.resources...)
 			result, err := getPVCError(t.Context(), kcli, tt.input)
 			if err != nil {
 				if tt.wantErr {
@@ -431,7 +431,7 @@ func Test_checkVolumeAccessModes(t *testing.T) {
 			req := require.New(t)
 			testCtx, cancelfunc := context.WithTimeout(context.Background(), time.Minute) // if your test takes more than 1m, there are issues
 			defer cancelfunc()
-			kcli := fake.NewSimpleClientset(tt.resources...)
+			kcli := fake.NewClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
 			if tt.backgroundFunc != nil {
 				go tt.backgroundFunc(testCtx, logger, kcli, tt.tmpPodName, "default", "pv-for-pf-pvc-testpvc")
@@ -891,7 +891,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			kcli := fake.NewSimpleClientset(tt.resources...)
+			kcli := fake.NewClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
 			result, err := pvcsForStorageClass(context.Background(), logger, kcli, tt.scname, tt.namespace)
 			if err != nil {
@@ -985,7 +985,7 @@ func Test_validateStorageClasses(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
 			result, err := validateStorageClasses(context.Background(), logger, clientset, tt.sourceSC, tt.destSC, tt.skipSourceSCValidation)
 			if !tt.wantErr {
@@ -1198,7 +1198,7 @@ func Test_deleteTmpPVCs(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := require.New(t)
-			clientset := fake.NewSimpleClientset(tt.resources...)
+			clientset := fake.NewClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
 
 			if tt.backgroundFunc != nil {

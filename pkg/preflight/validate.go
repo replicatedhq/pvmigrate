@@ -378,7 +378,7 @@ func getPVCError(ctx context.Context, client k8sclient.Interface, pvc *corev1.Pe
 
 // pvcsForStorageClass returns all PersistentVolumeClaims, filtered by namespace, for a given
 // storage class
-func pvcsForStorageClass(ctx context.Context, l *log.Logger, client k8sclient.Interface, srcSC, namespace string) (map[string]corev1.PersistentVolumeClaim, error) {
+func pvcsForStorageClass(ctx context.Context, _ *log.Logger, client k8sclient.Interface, srcSC, namespace string) (map[string]corev1.PersistentVolumeClaim, error) {
 	srcPVs, err := k8sutil.PVsByStorageClass(ctx, client, srcSC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVs for storage class %s: %w", srcSC, err)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -50,6 +51,9 @@ type Options struct {
 	Namespace            string
 	SetDefaults          bool
 	VerboseCopy          bool
+	PreSyncMode          bool
+	PreSyncOnly          bool
+	MaxPVs               int
 	SkipSourceValidation bool
 	PodReadyTimeout      time.Duration
 	DeletePVTimeout      time.Duration
@@ -62,17 +66,42 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
-	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.Namespace)
+	if options.PreSyncMode {
+		w.Println("\nRunning in pre-sync-mode: we first copy the PVC live, without scaling down pods. Once that pre-sync is completed, we scale down, do another copy/sync and finally swap the PVCs.")
+	}
+	if options.PreSyncOnly {
+		w.Println("\nRunning in pre-sync-only mode: we copy the PVC live, without scaling down pods, then exit. Run pvmigrate again without --pre-sync-only to complete the migration.")
+	}
+
+	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, &options)
 	if err != nil {
 		return err
 	}
 
-	updatedMatchingPVCs, err := scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
+	// annotate source nodes before any data copy, including the pre-sync one
+	err = annotateSourceNodes(ctx, w, clientset, matchingPVCs)
+	if err != nil {
+		return fmt.Errorf("failed to annotate source nodes: %w", err)
+	}
+
+	if options.PreSyncMode || options.PreSyncOnly {
+		err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second, true)
+		if err != nil {
+			return err
+		}
+	}
+
+	if options.PreSyncOnly {
+		w.Printf("\nPre-sync complete. Run pvmigrate again without --pre-sync-only to perform the final sync, swap PVCs, and scale pods back up.\n")
+		return nil
+	}
+
+	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
 	if err != nil {
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, options.SourceSCName, options.DestSCName, options.RsyncImage, updatedMatchingPVCs, options.VerboseCopy, time.Second, options.RsyncFlags)
+	err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second, false)
 	if err != nil {
 		return err
 	}
@@ -169,15 +198,19 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName string, destSCName string, rsyncImage string, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, verboseCopy bool, waitTime time.Duration, rsyncFlags []string) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options *Options, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, waitTime time.Duration, isPreSync bool) error {
 	// create a pod for each PVC migration, and wait for it to finish
-	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", sourceSCName, destSCName)
+	if isPreSync {
+		w.Printf("\nPre-syncing data from %s PVCs to %s PVCs (the source pods are still running, a final sync will run after they are scaled down)\n", options.SourceSCName, options.DestSCName)
+	} else {
+		w.Printf("\nCopying data from %s PVCs to %s PVCs\n", options.SourceSCName, options.DestSCName)
+	}
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
 			sourcePvcName, destPvcName := nsPvc.Name, k8sutil.NewPvcName(nsPvc.Name)
 			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
 
-			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, rsyncImage, verboseCopy, waitTime, rsyncFlags)
+			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, options, waitTime, isPreSync)
 			if err != nil {
 				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.Name, ns, err)
 			}
@@ -186,15 +219,19 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, verboseCopy bool, waitTime time.Duration, rsyncFlags []string) error {
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, options *Options, waitTime time.Duration, isPreSync bool) error {
 	w.Printf("Determining the node to migrate PVC %s on\n", sourcePvcName)
 	nodeName, err := getDesiredNode(ctx, clientset, ns, sourcePvcName)
 	if err != nil {
 		return fmt.Errorf("failed to get node for PVC %s in %s: %w", sourcePvcName, ns, err)
 	}
 
+	if nodeName == "" {
+		w.Printf("No node determined for PVC %s in %s, the migrator pod will not be pinned to a node. This may fail if the PVC is mounted by a pod on another node.\n", sourcePvcName, ns)
+	}
+
 	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
-	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, rsyncImage, nodeName, rsyncFlags)
+	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, options.RsyncImage, nodeName, options.RsyncFlags, isPreSync)
 	if err != nil {
 		return err
 	}
@@ -278,13 +315,13 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 				w.Printf("failed to read pod logs: %v\n", err)
 				break
 			}
-			if verboseCopy {
+			if options.VerboseCopy {
 				w.Printf("    %s\n", line)
 			} else {
 				_, _ = fmt.Fprintf(w.Writer(), ".") // one dot per line of output
 			}
 		}
-		if !verboseCopy {
+		if !options.VerboseCopy {
 			_, _ = fmt.Fprintf(w.Writer(), "done!\n") // add a newline at the end of the dots if not showing pod logs
 		}
 
@@ -311,14 +348,19 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		time.Sleep(waitTime)
 	}
 
-	w.Printf("finished migrating PVC %s\n", sourcePvcName)
+	if isPreSync {
+		w.Printf("finished pre-syncing PVC %s\n", sourcePvcName)
+	} else {
+		w.Printf("finished migrating PVC %s\n", sourcePvcName)
+	}
 	return nil
 }
 
-func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string, rsyncFlags []string) (*corev1.Pod, error) {
-	// apply nodeAffinity when migrating to a local volume provisioner
+func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string, rsyncFlags []string, isPreSync bool) (*corev1.Pod, error) {
+	// pin the pod to the source node when migrating to a local volume provisioner,
+	// or during the pre-sync pass, where the source PVC is still attached to that node
 	var nodeAffinity *corev1.Affinity
-	if isDestScLocalVolumeProvisioner && nodeName != "" {
+	if nodeName != "" && (isDestScLocalVolumeProvisioner || isPreSync) {
 		nodeAffinity = &corev1.Affinity{
 			NodeAffinity: &corev1.NodeAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
@@ -416,7 +458,7 @@ func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns s
 // a map of namespaces to arrays of original PVCs
 // an array of namespaces that the PVCs were found within
 // an error, if one was encountered
-func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, sourceSCName, destSCName string, Namespace string) (map[string][]*corev1.PersistentVolumeClaim, []string, error) {
+func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, opts *Options) (map[string][]*corev1.PersistentVolumeClaim, []string, error) {
 	// get PVs using the specified storage provider
 	pvs, err := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -425,30 +467,48 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	matchingPVs := []corev1.PersistentVolume{}
 	pvsByName := map[string]corev1.PersistentVolume{}
 	for _, pv := range pvs.Items {
-		if pv.Spec.StorageClassName == sourceSCName {
+		if pv.Spec.StorageClassName == opts.SourceSCName {
 			matchingPVs = append(matchingPVs, pv)
 			pvsByName[pv.Name] = pv
 		} else {
-			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, sourceSCName)
+			w.Printf("PV %s does not match source SC %s, not migrating\n", pv.Name, opts.SourceSCName)
 		}
 	}
 
 	// get PVCs using specified PVs
+	matchingPVCsCount := 0
+	skippedPVsCount := 0
 	matchingPVCs := map[string][]*corev1.PersistentVolumeClaim{}
 	for _, pv := range matchingPVs {
+		if opts.MaxPVs > 0 && matchingPVCsCount >= opts.MaxPVs {
+			skippedPVsCount++
+			continue
+		}
 		if pv.Spec.ClaimRef != nil {
+			if len(opts.Namespace) > 0 && pv.Spec.ClaimRef.Namespace != opts.Namespace {
+				continue // early continue, to prevent logging info regarding PV/PVCs in other namespaces
+			}
+
+			if strings.HasSuffix(pv.Spec.ClaimRef.Name, k8sutil.PVCNameSuffix) {
+				w.Printf("Skipping PV %s as the claiming PVC has the %s suffix", pv.Name, k8sutil.PVCNameSuffix)
+				continue
+			}
+
 			pvc, err := clientset.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(ctx, pv.Spec.ClaimRef.Name, metav1.GetOptions{})
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 
-			if pv.Spec.ClaimRef.Namespace == Namespace || Namespace == "" {
-				matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvc)
-			}
+			matchingPVCsCount++
+			matchingPVCs[pv.Spec.ClaimRef.Namespace] = append(matchingPVCs[pv.Spec.ClaimRef.Namespace], pvc)
 
 		} else {
 			return nil, nil, fmt.Errorf("PV %s does not have an associated PVC - resolve this before rerunning", pv.Name)
 		}
+	}
+
+	if skippedPVsCount > 0 {
+		w.Printf("\nReached the maximum of %d PVs to process, skipping %d additional PVs. Run pvmigrate again to migrate them.\n", opts.MaxPVs, skippedPVsCount)
 	}
 
 	// remove duplicates, ensuring pvcs are unique per namespace
@@ -488,7 +548,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	}
 
 	// create new PVCs for each matching PVC
-	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", destSCName)
+	w.Printf("\nCreating new PVCs to migrate data to using the %s StorageClass\n", opts.DestSCName)
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
 			newName := k8sutil.NewPvcName(nsPvc.Name)
@@ -510,7 +570,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 					return nil, nil, fmt.Errorf("failed to find existing PVC: %w", err)
 				}
 			} else if existingPVC != nil {
-				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == destSCName {
+				if existingPVC.Spec.StorageClassName != nil && *existingPVC.Spec.StorageClassName == opts.DestSCName {
 					existingSize := existingPVC.Spec.Resources.Requests.Storage().String()
 
 					if existingSize == desiredPvStorage.String() {
@@ -542,7 +602,7 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 					},
 				},
 				Spec: corev1.PersistentVolumeClaimSpec{
-					StorageClassName: &destSCName,
+					StorageClassName: &opts.DestSCName,
 					Resources: corev1.VolumeResourceRequirements{
 						Requests: map[corev1.ResourceName]resource.Quantity{
 							corev1.ResourceStorage: desiredPvStorage,
@@ -687,14 +747,44 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	}
 }
 
+func annotateSourceNodes(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim) error {
+	for ns, nsPvcs := range matchingPVCs {
+		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
+		}
+		for _, nsPod := range nsPods.Items {
+			for _, podVol := range nsPod.Spec.Volumes {
+				if podVol.PersistentVolumeClaim != nil {
+					for _, nsPvClaim := range nsPvcs {
+						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.Name {
+							err = mutatePV(ctx, w, clientset, nsPvClaim.Spec.VolumeName, func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
+								// add annotations describing what node this data came from to help migrate
+								if volume.Annotations == nil {
+									volume.Annotations = map[string]string{}
+								}
+								volume.Annotations[sourceNodeAnnotation] = nsPod.Spec.NodeName
+								return volume, nil
+							}, func(volume *corev1.PersistentVolume) bool {
+								return volume.Annotations[sourceNodeAnnotation] == nsPod.Spec.NodeName
+							})
+							if err != nil {
+								return fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.Name, nsPod.Spec.NodeName, err)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // scaleDownPods scales down statefulsets & deployments controlling pods mounting PVCs in a supplied list
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-// It returns a map of namespace to PVCs and any errors encountered.
-func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, checkInterval time.Duration) (map[string][]*corev1.PersistentVolumeClaim, error) {
-	// build new map with complete pvcCtx
-	updatedPVCs := matchingPVCs
+func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
 
 	// get pods using specified PVCs
 	matchingPods := map[string][]corev1.Pod{}
@@ -702,7 +792,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	for ns, nsPvcs := range matchingPVCs {
 		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
+			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
 		}
 		for _, nsPod := range nsPods.Items {
 		perPodLoop:
@@ -720,40 +810,6 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 		}
 	}
 
-	for ns, nsPvcs := range matchingPVCs {
-		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
-		}
-		for _, nsPod := range nsPods.Items {
-			for _, podVol := range nsPod.Spec.Volumes {
-				if podVol.PersistentVolumeClaim != nil {
-					for _, nsPvClaim := range nsPvcs {
-						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.Name {
-							// when migrating the pvc data we'll use the nodeName to create the volume
-							// on the node where the pod was originally scheduled on
-
-							// TODO this is the only place in this function that we mutate the existing cluster, is there a better way?
-							err = mutatePV(ctx, w, clientset, nsPvClaim.Spec.VolumeName, func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
-								// add annotations describing what node this data came from to help migrate
-								if volume.Annotations == nil {
-									volume.Annotations = map[string]string{}
-								}
-								volume.Annotations[sourceNodeAnnotation] = nsPod.Spec.NodeName
-								return volume, nil
-							}, func(volume *corev1.PersistentVolume) bool {
-								return volume.Annotations[sourceNodeAnnotation] == nsPod.Spec.NodeName
-							})
-							if err != nil {
-								return nil, fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.Name, nsPod.Spec.NodeName, err)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
 	w.Printf("\nFound %d matching pods to migrate across %d namespaces:\n", matchingPodsCount, len(matchingPods))
 	tw := tabwriter.NewWriter(w.Writer(), 2, 2, 1, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "namespace:\tpod:\t\n")
@@ -764,7 +820,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 	}
 	err := tw.Flush()
 	if err != nil {
-		return nil, fmt.Errorf("failed to print Pods: %w", err)
+		return fmt.Errorf("failed to print Pods: %w", err)
 	}
 
 	// get owners controlling specified pods
@@ -788,11 +844,11 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					// this pod was created by pvmigrate, so it can be deleted by pvmigrate
 					err := clientset.CoreV1().Pods(ns).Delete(ctx, nsPod.Name, metav1.DeleteOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
+						return fmt.Errorf("migration pod %s in %s leftover from a previous run failed to delete, please delete it before retrying: %w", nsPod.Name, ns, err)
 					}
 				} else {
 					// TODO: handle properly
-					return nil, fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
+					return fmt.Errorf("pod %s in %s did not have any owners!\nPlease delete it before retrying", nsPod.Name, ns)
 				}
 			}
 		}
@@ -808,7 +864,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 				case "StatefulSet":
 					ss, err := clientset.AppsV1().StatefulSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to get statefulset %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -829,24 +885,24 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling StatefulSet %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				case "ReplicaSet":
 					rs, err := clientset.AppsV1().ReplicaSets(ns).Get(ctx, ownerName, metav1.GetOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to get replicaset %s in %s: %w", ownerName, ns, err)
 					}
 
 					if len(rs.OwnerReferences) != 1 {
-						return nil, fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
+						return fmt.Errorf("expected 1 owner for replicaset %s in %s, found %d instead", ownerName, ns, len(rs.OwnerReferences))
 					}
 					if rs.OwnerReferences[0].Kind != "Deployment" {
-						return nil, fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
+						return fmt.Errorf("expected owner for replicaset %s in %s to be a deployment, found %s of kind %s instead", ownerName, ns, rs.OwnerReferences[0].Name, rs.OwnerReferences[0].Kind)
 					}
 
 					dep, err := clientset.AppsV1().Deployments(ns).Get(ctx, rs.OwnerReferences[0].Name, metav1.GetOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to get deployment %s scale in %s: %w", ownerName, ns, err)
 					}
 
 					formerScale := int32(1)
@@ -867,10 +923,10 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 					w.Printf("scaling Deployment %s from %d to 0 in %s\n", ownerName, formerScale, ns)
 					_, err = clientset.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
 					if err != nil {
-						return nil, fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
+						return fmt.Errorf("failed to scale statefulset %s to zero in %s: %w", ownerName, ns, err)
 					}
 				default:
-					return nil, fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
+					return fmt.Errorf("scaling pods controlled by a %s is not supported, please delete the pods controlled by %s in %s before retrying", ownerKind, ownerKind, ns)
 				}
 			}
 		}
@@ -884,7 +940,7 @@ checkPvcPodLoop:
 		for ns, nsPvcs := range matchingPVCs {
 			nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 			if err != nil {
-				return nil, fmt.Errorf("failed to get pods in %s: %w", ns, err)
+				return fmt.Errorf("failed to get pods in %s: %w", ns, err)
 			}
 			for _, nsPod := range nsPods.Items {
 				for _, podVol := range nsPod.Spec.Volumes {
@@ -892,7 +948,7 @@ checkPvcPodLoop:
 						for _, nsClaim := range nsPvcs {
 							if podVol.PersistentVolumeClaim.ClaimName == nsClaim.Name {
 								if nsPod.CreationTimestamp.After(migrationStartTime) {
-									return nil, fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
+									return fmt.Errorf("pod %s in %s mounting %s was created at %s, after scale-down started at %s. It is likely that there is some other operator scaling this back up", nsPod.Name, ns, nsClaim.Name, nsPod.CreationTimestamp.Format(time.RFC3339), migrationStartTime.Format(time.RFC3339))
 								}
 
 								w.Printf("Found pod %s in %s mounting to-be-migrated PVC %s, waiting\n", nsPod.Name, ns, nsClaim.Name)
@@ -909,7 +965,7 @@ checkPvcPodLoop:
 	}
 
 	w.Printf("All pods removed successfully\n")
-	return updatedPVCs, nil
+	return nil
 }
 
 func scaleUpPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, namespaces []string) error {

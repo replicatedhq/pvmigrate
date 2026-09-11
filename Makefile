@@ -37,7 +37,7 @@ clean:
 deps:
 	@if [ -z `which golangci-lint` ]; then \
 		echo "installing golangci-lint";\
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin;\
+		curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(shell go env GOPATH)/bin;\
 	fi
 
 .PHONY: lint
